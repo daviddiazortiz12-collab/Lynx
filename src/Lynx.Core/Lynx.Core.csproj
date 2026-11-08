@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Lynx.Core</RootNamespace>
+    <AssemblyName>Lynx.Core</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <NoWarn>$(NoWarn);MSB3277;NU1701;CA2255</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="StudioElevenLib">
+      <HintPath>..\..\Libs\StudioElevenLib.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Reuse Lynx data & domain layer directly without duplicating code or pulling in WinForms UI -->
+  <ItemGroup>
+    <Compile Include="..\..\Lynx\InazumaEleven\Base64\**\*.cs" LinkBase="LynxDomain\Base64" />
+    <Compile Include="..\..\Lynx\InazumaEleven\Data\**\*.cs" LinkBase="LynxDomain\Data" />
+    <Compile Include="..\..\Lynx\InazumaEleven\Games\**\*.cs" LinkBase="LynxDomain\Games" />
+    <Compile Include="..\..\Lynx\InazumaEleven\Logic\**\*.cs" LinkBase="LynxDomain\Logic" />
+  </ItemGroup>
+
+  <!-- Embed Lynx Common JSON metadata under the exact manifest resource names expected by CommonData -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\Lynx\InazumaEleven\Common\*.json" LogicalName="Lynx.InazumaEleven.Common.%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>
