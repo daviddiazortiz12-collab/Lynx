@@ -188,6 +188,21 @@ namespace Lynx.Core.RomFs
             return current;
         }
 
+        public static byte[] TryReadFileFromPath(VirtualDirectory root, string fullVirtualPath)
+        {
+            if (root == null || string.IsNullOrWhiteSpace(fullVirtualPath))
+                return null;
+
+            string normalized = fullVirtualPath.Replace('\\', '/');
+            if (!normalized.StartsWith("/", StringComparison.Ordinal))
+                normalized = "/" + normalized;
+
+            if (!root.IsFullPathExists(normalized))
+                return null;
+
+            return root.GetFileFromFullPath(normalized);
+        }
+
         public static void WriteFileAtPath(VirtualDirectory root, string fullVirtualPath, byte[] content)
         {
             if (root == null)

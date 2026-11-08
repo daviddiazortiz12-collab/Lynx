@@ -43,7 +43,7 @@ namespace IEGORandomizer.Tests
                 var palpacks = workspace.Game.GetItems("kizunax");
                 var keyItems = workspace.Game.GetItems("important");
 
-                Assert.Equal(27, charaBases.Length);
+                Assert.Equal(28, charaBases.Length);
                 Assert.Equal(27, charaParams.Length);
                 Assert.Equal(20, skills.Length);
                 Assert.Equal(3, storyTeams.Length);
@@ -150,18 +150,27 @@ namespace IEGORandomizer.Tests
 
                 using var game = new SafeGOGame(sourcePath);
                 var bases = game.GetCharabase();
-                // Mutate one entry in memory to hit the exact 2048 engine crash boundary
-                bases[bases.Length - 1].ModelNumber = 2048;
+                // Retail CharaBaseType==3 NPC (cn9001, ModelNumber=9001) must be excluded from playable soccer pool
+                // without falsely failing ArchiveIntegrityValidator
+                var retailNpc = bases.First(b => b.CharaBaseType == 3 && b.ModelNumber == 9001);
+                var initialProtection = new IEGORandomizer.Engine.Protection.StoryProtectionService()
+                    .BuildContext(game, GameEdition.Light, null);
+                var initialIntegrity = IEGORandomizer.Engine.Validation.ArchiveIntegrityValidator.Validate(game, initialProtection, null);
+                Assert.True(initialIntegrity.IsValid, "Retail CharaBaseType==3 NPC with ModelNumber 9001 must pass integrity.");
+
+                // Mutate a playable CharaBaseType==1 entry in memory to hit the exact 2048 engine crash boundary
+                var playableEntry = bases.First(b => b.CharaBaseType == 1);
+                playableEntry.ModelNumber = 2048;
                 game.SaveCharaBase(bases);
 
                 var visual = IEGORandomizer.Engine.Validation.VisualCoherenceValidator.AnalyzeArchive(game);
-                Assert.False(visual.CoherentPlayableBaseHashes.Contains(bases[bases.Length - 1].BaseHash),
+                Assert.False(visual.CoherentPlayableBaseHashes.Contains(retailNpc.BaseHash),
+                    "NPC CharaBaseType==3 must be excluded from coherent playable pool.");
+                Assert.False(visual.CoherentPlayableBaseHashes.Contains(playableEntry.BaseHash),
                     "ModelNumber >= 2048 must be excluded from coherent playable pool.");
 
-                var protection = new IEGORandomizer.Engine.Protection.StoryProtectionService()
-                    .BuildContext(game, GameEdition.Light, null);
-                var integrity = IEGORandomizer.Engine.Validation.ArchiveIntegrityValidator.Validate(game, protection, null);
-                Assert.False(integrity.IsValid, "ArchiveIntegrityValidator must flag ModelNumber == 2048.");
+                var integrity = IEGORandomizer.Engine.Validation.ArchiveIntegrityValidator.Validate(game, initialProtection, null);
+                Assert.False(integrity.IsValid, "ArchiveIntegrityValidator must flag playable ModelNumber == 2048.");
             }
             finally
             {

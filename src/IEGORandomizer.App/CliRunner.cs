@@ -116,6 +116,7 @@ namespace IEGORandomizer.App
             {
                 Console.Error.WriteLine();
                 Console.Error.WriteLine($"[ERROR] {ex.Message}");
+                Console.Error.WriteLine(ex.ToString());
                 return 1;
             }
         }

@@ -203,6 +203,17 @@ namespace IEGORandomizer.Tests
                 Skin = 0,
                 Year = 1
             });
+            // Retail IEGO1 overworld NPCs ("cn9001..cn9005") legitimately use ModelNumber 9001..9005 with CharaBaseType=3
+            charaBases.Add(new CharaBase
+            {
+                BaseHash = Level5IdHelper.ComputeCrc32Utf8("cn9001"),
+                ModelNumber = 9001,
+                CharaBaseType = 3,
+                Gender = 1,
+                Body = 1,
+                Skin = 1,
+                Year = 1
+            });
             charaParams.Add(new CharaParam
             {
                 ParamHash = npcParamHash,
@@ -431,7 +442,20 @@ namespace IEGORandomizer.Tests
                 "/data/res/soccer/scr_br01.cfg.bin",
                 BuildRouteBinary(Level5IdHelper.ComputeCrc32Utf8("route_01"), routeCells));
 
-            // 6. Map Overworld Treasure Chests, Pachanga Spawns, and FUNCPOINT TBoxBitCheck
+            // Retail polymorphic Competition Route scr_br_0005_s.cfg.bin (referenced by TALK_CONFIG EventType=7)
+            Arc0SafeArchive.WriteFileAtPath(
+                root,
+                "/data/res/soccer/scr_br_0005_s.cfg.bin",
+                BuildPolymorphicRetailRouteBinary());
+
+            // Retail polymorphic Shop shop_01.cfg.bin (Int 0, null, and Base64 Condition tags)
+            Arc0SafeArchive.WriteFileAtPath(
+                root,
+                "/data/res/shop/shop_01.cfg.bin",
+                BuildPolymorphicRetailShopBinary());
+
+            // 6. Map Overworld Treasure Chests, Pachanga Spawns, TALK_CONFIG ("scr_br_0005_s"), and FUNCPOINT TBoxBitCheck
+            Arc0SafeArchive.WriteFileAtPath(root, "/data/map/m001a/m001a.talk.bin", BuildRetailMapTalkBinary());
             Arc0SafeArchive.WriteFileAtPath(root, "/data/map/m001a/m001a_tbox.bin", BuildMapTBoxBinary(new[]
             {
                 (Id: 1, LightItem: Level5IdHelper.ComputeCrc32Utf8("iic0001"), Flag: 10, Type: 0, ShadowItem: Level5IdHelper.ComputeCrc32Utf8("iic0002")),
@@ -840,6 +864,163 @@ namespace IEGORandomizer.Tests
             eventDef.AddChild(tboxCheck);
             ptreeRoot.AddChild(eventDef);
             cfg.Entries.AddChild(ptreeRoot);
+            return cfg.Save();
+        }
+
+        public static byte[] BuildRetailMapTalkBinary()
+        {
+            var cfg = new CfgBin<CfgTreeNode> { Encoding = Encoding.UTF8 };
+
+            var infoBegin = new CfgTreeNode(new Entry("TALK_INFO_BEGIN", new List<Variable>
+            {
+                new Variable(CfgValueType.Int, 4)
+            }));
+            for (int i = 0; i < 4; i++)
+            {
+                infoBegin.AddChild(new CfgTreeNode(new Entry("TALK_INFO", new List<Variable>
+                {
+                    new Variable(CfgValueType.Int, Level5IdHelper.ComputeCrc32Utf8($"npc_talk_{i:D2}")),
+                    new Variable(CfgValueType.Int, i),
+                    new Variable(CfgValueType.Int, 1)
+                })));
+            }
+            cfg.Entries.AddChild(infoBegin);
+            cfg.Entries.AddChild(new CfgTreeNode(new Entry("TALK_INFO_END")));
+
+            var configBegin = new CfgTreeNode(new Entry("TALK_CONFIG_BEGIN", new List<Variable>
+            {
+                new Variable(CfgValueType.Int, 4)
+            }));
+            // EventType 1 = Text (Int CRC32)
+            configBegin.AddChild(new CfgTreeNode(new Entry("TALK_CONFIG", new List<Variable>
+            {
+                new Variable(CfgValueType.Int, 1),
+                new Variable(CfgValueType.Int, Level5IdHelper.ComputeCrc32Utf8("txt_hello")),
+                new Variable(CfgValueType.Int, 0),
+                new Variable(CfgValueType.Int, 0)
+            })));
+            // EventType 3 = Script (String script ID)
+            configBegin.AddChild(new CfgTreeNode(new Entry("TALK_CONFIG", new List<Variable>
+            {
+                new Variable(CfgValueType.Int, 3),
+                new Variable(CfgValueType.String, "ev1001"),
+                new Variable(CfgValueType.Int, 0),
+                new Variable(CfgValueType.Int, 0)
+            })));
+            // EventType 5 = Shop (String shop ID)
+            configBegin.AddChild(new CfgTreeNode(new Entry("TALK_CONFIG", new List<Variable>
+            {
+                new Variable(CfgValueType.Int, 5),
+                new Variable(CfgValueType.String, "shop_01"),
+                new Variable(CfgValueType.Int, 0),
+                new Variable(CfgValueType.Int, 0)
+            })));
+            // EventType 7 = CompetitiveRoute (Exact string "scr_br_0005_s" from retail IEGO Luz RomFS!)
+            configBegin.AddChild(new CfgTreeNode(new Entry("TALK_CONFIG", new List<Variable>
+            {
+                new Variable(CfgValueType.Int, 7),
+                new Variable(CfgValueType.String, "scr_br_0005_s"),
+                new Variable(CfgValueType.Int, 0),
+                new Variable(CfgValueType.Int, 0)
+            })));
+
+            cfg.Entries.AddChild(configBegin);
+            cfg.Entries.AddChild(new CfgTreeNode(new Entry("TALK_CONFIG_END")));
+            return cfg.Save();
+        }
+
+        public static byte[] BuildPolymorphicRetailRouteBinary()
+        {
+            var cfg = new CfgBin<CfgTreeNode> { Encoding = Encoding.UTF8 };
+            var begin = new CfgTreeNode(new Entry("ROUTE_CONFIG_BEGIN", new List<Variable>
+            {
+                new Variable(CfgValueType.Int, 3),
+                new Variable(CfgValueType.String, "scr_br_0005_s")
+            }));
+
+            // Cell 0: Battle node with MatchRestriction ticket and polymorphic Int 0 tags on PhaseAppear/Map/MatchTextLock
+            begin.AddChild(new CfgTreeNode(new Entry("ROUTE_CONFIG", new List<Variable>
+            {
+                new Variable(CfgValueType.Int, 501),
+                new Variable(CfgValueType.Int, 1),
+                new Variable(CfgValueType.String, "btl0102"),
+                new Variable(CfgValueType.Int, Level5IdHelper.ComputeCrc32Utf8("iik0001")),
+                new Variable(CfgValueType.Int, 0),
+                new Variable(CfgValueType.Int, 1),
+                new Variable(CfgValueType.Int, -1),
+                new Variable(CfgValueType.Int, -1),
+                new Variable(CfgValueType.Int, 0), // PhaseAppear as Int 0
+                new Variable(CfgValueType.Int, 0), // Map as Int 0
+                new Variable(CfgValueType.Int, 0),
+                new Variable(CfgValueType.String, null) // MatchTextLock as null string (-1)
+            })));
+
+            // Cell 1: Normal Route Chest (ContentID as String "iie0002", PhaseAppear as Base64 condition)
+            begin.AddChild(new CfgTreeNode(new Entry("ROUTE_CONFIG", new List<Variable>
+            {
+                new Variable(CfgValueType.Int, 502),
+                new Variable(CfgValueType.Int, 3),
+                new Variable(CfgValueType.String, "iie0002"),
+                new Variable(CfgValueType.Int, 0),
+                new Variable(CfgValueType.Int, 1),
+                new Variable(CfgValueType.Int, 2),
+                new Variable(CfgValueType.Int, -1),
+                new Variable(CfgValueType.Int, -1),
+                new Variable(CfgValueType.String, "AQIDBA=="),
+                new Variable(CfgValueType.Int, 0),
+                new Variable(CfgValueType.Int, 0),
+                new Variable(CfgValueType.Int, 0)
+            })));
+
+            // Cell 2: Locked Route Chest holding Key Item -> Protected!
+            begin.AddChild(new CfgTreeNode(new Entry("ROUTE_CONFIG", new List<Variable>
+            {
+                new Variable(CfgValueType.Int, 503),
+                new Variable(CfgValueType.Int, 4),
+                new Variable(CfgValueType.Int, Level5IdHelper.ComputeCrc32Utf8("iik0001")),
+                new Variable(CfgValueType.Int, 0),
+                new Variable(CfgValueType.Int, 2),
+                new Variable(CfgValueType.Int, -1),
+                new Variable(CfgValueType.Int, -1),
+                new Variable(CfgValueType.Int, -1),
+                new Variable(CfgValueType.Int, 0),
+                new Variable(CfgValueType.String, "m001a"),
+                new Variable(CfgValueType.Int, 0),
+                new Variable(CfgValueType.String, "LOCK_ROUTE_05")
+            })));
+
+            cfg.Entries.AddChild(begin);
+            cfg.Entries.AddChild(new CfgTreeNode(new Entry("ROUTE_CONFIG_END")));
+            return cfg.Save();
+        }
+
+        public static byte[] BuildPolymorphicRetailShopBinary()
+        {
+            var cfg = new CfgBin<CfgTreeNode> { Encoding = Encoding.UTF8 };
+            var begin = new CfgTreeNode(new Entry("SHOP_CONFIG_INFO_BEGIN", new List<Variable>
+            {
+                new Variable(CfgValueType.Int, 3),
+                new Variable(CfgValueType.String, "shop_01")
+            }));
+
+            begin.AddChild(new CfgTreeNode(new Entry("SHOP_CONFIG_INFO", new List<Variable>
+            {
+                new Variable(CfgValueType.Int, Level5IdHelper.ComputeCrc32Utf8("iic0001")),
+                new Variable(CfgValueType.Int, 0) // Int 0 condition
+            })));
+            begin.AddChild(new CfgTreeNode(new Entry("SHOP_CONFIG_INFO", new List<Variable>
+            {
+                new Variable(CfgValueType.String, "iie0001"), // String ItemID
+                new Variable(CfgValueType.String, null) // Null string condition (previously crashed Game.SaveShop!)
+            })));
+            begin.AddChild(new CfgTreeNode(new Entry("SHOP_CONFIG_INFO", new List<Variable>
+            {
+                new Variable(CfgValueType.Int, Level5IdHelper.ComputeCrc32Utf8("iik0001")), // Protected Key Item
+                new Variable(CfgValueType.String, "AQIDBA==") // Base64 condition
+            })));
+
+            cfg.Entries.AddChild(begin);
+            cfg.Entries.AddChild(new CfgTreeNode(new Entry("SHOP_CONFIG_INFO_END")));
             return cfg.Save();
         }
 

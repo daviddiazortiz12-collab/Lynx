@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using StudioElevenLib.Level5.Binary.Logic;
 
 namespace Lynx.Core.Maps
@@ -79,12 +81,18 @@ namespace Lynx.Core.Maps
 
     /// <summary>
     /// Dependencies discovered in map <c>*_funcpt.bin</c> and <c>*.talk.bin</c> files that gate progression.
+    /// Preserves both CRC32/numeric IDs and textual Level-5 identifiers (such as <c>"scr_br_0005_s"</c>)
+    /// without lossy or arbitrary conversions.
     /// </summary>
     public sealed class MapProgressionDependencies
     {
-        public System.Collections.Generic.HashSet<int> ProtectedTBoxFlags { get; } = new();
-        public System.Collections.Generic.HashSet<int> ReferencedFuncptItemIds { get; } = new();
-        public System.Collections.Generic.HashSet<int> ReferencedScriptHashes { get; } = new();
-        public System.Collections.Generic.HashSet<int> ReferencedRouteHashes { get; } = new();
+        public HashSet<int> ProtectedTBoxFlags { get; } = new();
+        public HashSet<int> ReferencedFuncptItemIds { get; } = new();
+        public HashSet<int> ReferencedScriptHashes { get; } = new();
+        public HashSet<string> ReferencedScriptIds { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<int> ReferencedRouteHashes { get; } = new();
+        public HashSet<string> ReferencedRouteIds { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<int> ReferencedShopHashes { get; } = new();
+        public HashSet<string> ReferencedShopIds { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
 }

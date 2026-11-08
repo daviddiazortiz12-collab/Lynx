@@ -14,6 +14,7 @@ namespace IEGORandomizer.App.Services
         public int Percent { get; set; }
         public string CurrentStage { get; set; } = "Iniciando...";
         public string ErrorMessage { get; set; }
+        public string ErrorDetails { get; set; }
         public RandomizationExecutionReport Report { get; set; }
     }
 
@@ -68,7 +69,9 @@ namespace IEGORandomizer.App.Services
                 }
                 catch (Exception ex)
                 {
+                    string failedStage = state.CurrentStage;
                     state.ErrorMessage = ex.Message;
+                    state.ErrorDetails = $"[{state.Percent}% — {failedStage}] {ex}";
                     state.CurrentStage = "Proceso detenido por validación o error de entrada.";
                     state.Status = "failed";
                 }

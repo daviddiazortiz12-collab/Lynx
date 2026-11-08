@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
+using Lynx.Core.Binary;
 using Lynx.Core.RomFs;
 using StudioElevenLib.Level5.Binary;
 using StudioElevenLib.Level5.Binary.Collections;
@@ -11,63 +11,51 @@ using StudioElevenLib.Tools;
 namespace Lynx.Core.Maps
 {
     /// <summary>
-    /// Discovers, reads, and updates map-level treasure chests (<see cref="TBoxConfigRecord"/>),
-    /// overworld pachanga spawns (<see cref="EncountMapRecord"/>), and map progression bit checks
-    /// (<c>FUNCPOINT</c> <c>TBoxBitCheck</c> / <c>ItemID</c>) inside <c>ie_a.fa</c> without assuming
-    /// hardcoded file names or dropping unrelated sections in multi-table CfgBin files.
+    /// Non-destructive reader and writer for overworld map <c>TBOX_CONFIG</c> (treasure chests),
+    /// <c>ENCOUNT_INFO</c> (5v5 pachanga spawns), <c>TALK_CONFIG</c> (NPC event triggers including
+    /// textual Competition Route IDs like <c>"scr_br_0005_s"</c>), and <c>FUNCPOINT</c>
+    /// (<c>TBoxBitCheck</c> progression flags) across <c>/data/map/&lt;mapId&gt;/</c> inside <c>ie_a.fa</c>.
     /// </summary>
     public static class MapDataService
     {
-        private static readonly string[] MapRootCandidates = { "/data/map", "/data/res/map" };
-
-        private static readonly HashSet<string> KnownTBoxEntryNames = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "TBOX_CONFIG",
-            "TBOX_INFO",
-            "ONEPLACE_TBOX",
-            "TREASURE_BOX"
-        };
-
-        private static readonly HashSet<string> KnownEncountEntryNames = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "ENCOUNT_INFO",
-            "ENCOUNT_CONFIG",
-            "MAP_ENCOUNT_INFO"
-        };
-
         public static List<MapTreasureChestEntry> LoadAllTreasureChests(VirtualDirectory archiveRoot)
         {
             var results = new List<MapTreasureChestEntry>();
-            foreach (var (mapId, filePath, bytes) in EnumerateMapBinaryFiles(archiveRoot))
+            if (archiveRoot == null || !archiveRoot.IsFolderExists("/data/map"))
+                return results;
+
+            VirtualDirectory mapRoot = archiveRoot.GetFolderFromFullPath("/data/map");
+            foreach (VirtualDirectory mapFolder in mapRoot.Folders.OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
             {
-                if (filePath.EndsWith("_funcpt.bin", StringComparison.OrdinalIgnoreCase) ||
-                    filePath.EndsWith("_healpt.bin", StringComparison.OrdinalIgnoreCase) ||
-                    filePath.EndsWith("_mapenv.bin", StringComparison.OrdinalIgnoreCase) ||
-                    filePath.EndsWith(".npc.bin", StringComparison.OrdinalIgnoreCase) ||
-                    filePath.EndsWith(".talk.bin", StringComparison.OrdinalIgnoreCase))
+                foreach (var kvp in mapFolder.Files.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
                 {
-                    continue;
-                }
+                    string fileName = kvp.Key;
+                    if (!IsCandidateMapCfgFile(fileName))
+                        continue;
 
-                if (!TryOpenCfgTree(bytes, out var cfgBin))
-                    continue;
+                    string fullVirtualPath = $"/data/map/{mapFolder.Name}/{fileName}";
+                    byte[] bytes = mapFolder.GetFileFromFullPath("/" + fileName);
+                    if (bytes == null || bytes.Length < 16)
+                        continue;
 
-                var nodes = new List<(string EntryName, CfgTreeNode Node)>();
-                CollectMatchingNodes(cfgBin.Entries, IsTBoxNode, nodes);
+                    if (!TryOpenCfgTree(bytes, out CfgBin<CfgTreeNode> cfg))
+                        continue;
 
-                for (int i = 0; i < nodes.Count; i++)
-                {
-                    var (entryName, node) = nodes[i];
-                    if (TryReadTBoxRecord(node, out var record))
+                    var tboxNodes = FindEntriesByPrefix(cfg.Entries, "TBOX_CONFIG");
+                    for (int idx = 0; idx < tboxNodes.Count; idx++)
                     {
-                        results.Add(new MapTreasureChestEntry
+                        var node = tboxNodes[idx];
+                        if (TryReadTBoxRecord(node, out TBoxConfigRecord record))
                         {
-                            MapId = mapId,
-                            VirtualFilePath = filePath,
-                            EntryName = entryName,
-                            NodeIndex = i,
-                            Record = record
-                        });
+                            results.Add(new MapTreasureChestEntry
+                            {
+                                MapId = mapFolder.Name,
+                                VirtualFilePath = fullVirtualPath,
+                                EntryName = node.Item.Name,
+                                NodeIndex = idx,
+                                Record = record
+                            });
+                        }
                     }
                 }
             }
@@ -75,67 +63,78 @@ namespace Lynx.Core.Maps
             return results;
         }
 
-        public static void SaveTreasureChests(VirtualDirectory archiveRoot, IEnumerable<MapTreasureChestEntry> modifiedEntries)
+        public static void SaveTreasureChests(VirtualDirectory archiveRoot, IEnumerable<MapTreasureChestEntry> modifiedChests)
         {
-            if (archiveRoot == null)
-                throw new ArgumentNullException(nameof(archiveRoot));
-            if (modifiedEntries == null)
+            if (archiveRoot == null || modifiedChests == null)
                 return;
 
-            foreach (var group in modifiedEntries.GroupBy(e => e.VirtualFilePath, StringComparer.Ordinal))
+            foreach (var byFile in modifiedChests.GroupBy(c => c.VirtualFilePath, StringComparer.Ordinal))
             {
-                byte[] currentBytes = archiveRoot.GetFileFromFullPath(group.Key);
-                var cfgBin = new CfgBin<CfgTreeNode>();
-                cfgBin.Open(currentBytes);
+                byte[] existing = Arc0SafeArchive.TryReadFileFromPath(archiveRoot, byFile.Key);
+                if (existing == null)
+                    continue;
 
-                var nodes = new List<(string EntryName, CfgTreeNode Node)>();
-                CollectMatchingNodes(cfgBin.Entries, IsTBoxNode, nodes);
+                var cfg = new CfgBin<CfgTreeNode>();
+                cfg.Open(existing);
 
-                foreach (var entry in group)
+                var tboxNodes = FindEntriesByPrefix(cfg.Entries, "TBOX_CONFIG");
+                foreach (MapTreasureChestEntry entry in byFile)
                 {
-                    if (entry.NodeIndex >= 0 && entry.NodeIndex < nodes.Count)
+                    if (entry.NodeIndex < 0 || entry.NodeIndex >= tboxNodes.Count)
+                        continue;
+
+                    var vars = tboxNodes[entry.NodeIndex].Item.Variables;
+                    if (vars.Count >= 9)
                     {
-                        WriteTBoxRecordInPlace(nodes[entry.NodeIndex].Node, entry.Record);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[5], entry.Record.ItemIDLight);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[6], entry.Record.TBoxFlag);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[7], entry.Record.TboxType);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[8], entry.Record.ItemIDShadow);
                     }
                 }
 
-                Arc0SafeArchive.WriteFileAtPath(archiveRoot, group.Key, cfgBin.Save());
+                Arc0SafeArchive.WriteFileAtPath(archiveRoot, byFile.Key, cfg.Save());
             }
         }
 
         public static List<MapEncounterSpawnEntry> LoadAllEncounterSpawns(VirtualDirectory archiveRoot)
         {
             var results = new List<MapEncounterSpawnEntry>();
-            foreach (var (mapId, filePath, bytes) in EnumerateMapBinaryFiles(archiveRoot))
+            if (archiveRoot == null || !archiveRoot.IsFolderExists("/data/map"))
+                return results;
+
+            VirtualDirectory mapRoot = archiveRoot.GetFolderFromFullPath("/data/map");
+            foreach (VirtualDirectory mapFolder in mapRoot.Folders.OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
             {
-                if (filePath.EndsWith("_funcpt.bin", StringComparison.OrdinalIgnoreCase) ||
-                    filePath.EndsWith("_healpt.bin", StringComparison.OrdinalIgnoreCase) ||
-                    filePath.EndsWith("_mapenv.bin", StringComparison.OrdinalIgnoreCase) ||
-                    filePath.EndsWith(".npc.bin", StringComparison.OrdinalIgnoreCase) ||
-                    filePath.EndsWith(".talk.bin", StringComparison.OrdinalIgnoreCase))
+                foreach (var kvp in mapFolder.Files.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
                 {
-                    continue;
-                }
+                    string fileName = kvp.Key;
+                    if (!IsCandidateMapCfgFile(fileName))
+                        continue;
 
-                if (!TryOpenCfgTree(bytes, out var cfgBin))
-                    continue;
+                    string fullVirtualPath = $"/data/map/{mapFolder.Name}/{fileName}";
+                    byte[] bytes = mapFolder.GetFileFromFullPath("/" + fileName);
+                    if (bytes == null || bytes.Length < 16)
+                        continue;
 
-                var nodes = new List<(string EntryName, CfgTreeNode Node)>();
-                CollectMatchingNodes(cfgBin.Entries, IsEncountNode, nodes);
+                    if (!TryOpenCfgTree(bytes, out CfgBin<CfgTreeNode> cfg))
+                        continue;
 
-                for (int i = 0; i < nodes.Count; i++)
-                {
-                    var (entryName, node) = nodes[i];
-                    if (TryReadEncountRecord(node, out var record))
+                    var encountNodes = FindEntriesByPrefix(cfg.Entries, "ENCOUNT_INFO");
+                    for (int idx = 0; idx < encountNodes.Count; idx++)
                     {
-                        results.Add(new MapEncounterSpawnEntry
+                        var node = encountNodes[idx];
+                        if (TryReadEncountRecord(node, out EncountMapRecord record))
                         {
-                            MapId = mapId,
-                            VirtualFilePath = filePath,
-                            EntryName = entryName,
-                            NodeIndex = i,
-                            Record = record
-                        });
+                            results.Add(new MapEncounterSpawnEntry
+                            {
+                                MapId = mapFolder.Name,
+                                VirtualFilePath = fullVirtualPath,
+                                EntryName = node.Item.Name,
+                                NodeIndex = idx,
+                                Record = record
+                            });
+                        }
                     }
                 }
             }
@@ -143,343 +142,378 @@ namespace Lynx.Core.Maps
             return results;
         }
 
-        public static void SaveEncounterSpawns(VirtualDirectory archiveRoot, IEnumerable<MapEncounterSpawnEntry> modifiedEntries)
+        public static void SaveEncounterSpawns(VirtualDirectory archiveRoot, IEnumerable<MapEncounterSpawnEntry> modifiedSpawns)
         {
-            if (archiveRoot == null)
-                throw new ArgumentNullException(nameof(archiveRoot));
-            if (modifiedEntries == null)
+            if (archiveRoot == null || modifiedSpawns == null)
                 return;
 
-            foreach (var group in modifiedEntries.GroupBy(e => e.VirtualFilePath, StringComparer.Ordinal))
+            foreach (var byFile in modifiedSpawns.GroupBy(s => s.VirtualFilePath, StringComparer.Ordinal))
             {
-                byte[] currentBytes = archiveRoot.GetFileFromFullPath(group.Key);
-                var cfgBin = new CfgBin<CfgTreeNode>();
-                cfgBin.Open(currentBytes);
+                byte[] existing = Arc0SafeArchive.TryReadFileFromPath(archiveRoot, byFile.Key);
+                if (existing == null)
+                    continue;
 
-                var nodes = new List<(string EntryName, CfgTreeNode Node)>();
-                CollectMatchingNodes(cfgBin.Entries, IsEncountNode, nodes);
+                var cfg = new CfgBin<CfgTreeNode>();
+                cfg.Open(existing);
 
-                foreach (var entry in group)
+                var encountNodes = FindEntriesByPrefix(cfg.Entries, "ENCOUNT_INFO");
+                foreach (MapEncounterSpawnEntry entry in byFile)
                 {
-                    if (entry.NodeIndex >= 0 && entry.NodeIndex < nodes.Count)
+                    if (entry.NodeIndex < 0 || entry.NodeIndex >= encountNodes.Count)
+                        continue;
+
+                    var vars = encountNodes[entry.NodeIndex].Item.Variables;
+                    if (vars.Count >= 22)
                     {
-                        WriteEncountRecordInPlace(nodes[entry.NodeIndex].Node, entry.Record);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[0], entry.Record.ChasePlayer);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[1], entry.Record.TeamID);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[12], entry.Record.PlayerID1);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[13], entry.Record.PlayerID2);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[14], entry.Record.PlayerID3);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[15], entry.Record.PlayerID4);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[16], entry.Record.PlayerID5);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[17], entry.Record.Uniform);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[18], entry.Record.Boots);
                     }
                 }
 
-                Arc0SafeArchive.WriteFileAtPath(archiveRoot, group.Key, cfgBin.Save());
+                Arc0SafeArchive.WriteFileAtPath(archiveRoot, byFile.Key, cfg.Save());
             }
         }
 
+        /// <summary>
+        /// Scans map <c>*_funcpt.bin</c> (PTREE <c>TBoxBitCheck</c> &amp; <c>ItemID</c>) and <c>*.talk.bin</c>
+        /// (<c>TALK_CONFIG</c> NPC scripts, competition routes such as <c>"scr_br_0005_s"</c>, and shops)
+        /// to protect story-gating chests and event dependencies.
+        /// </summary>
         public static MapProgressionDependencies ScanMapProgressionDependencies(VirtualDirectory archiveRoot)
         {
             var deps = new MapProgressionDependencies();
-            foreach (var (_, filePath, bytes) in EnumerateMapBinaryFiles(archiveRoot))
+            if (archiveRoot == null || !archiveRoot.IsFolderExists("/data/map"))
+                return deps;
+
+            VirtualDirectory mapRoot = archiveRoot.GetFolderFromFullPath("/data/map");
+            foreach (VirtualDirectory mapFolder in mapRoot.Folders.OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
             {
-                if (filePath.EndsWith("_funcpt.bin", StringComparison.OrdinalIgnoreCase))
+                foreach (var kvp in mapFolder.Files.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
                 {
-                    ScanFuncpointFile(bytes, deps);
-                }
-                else if (filePath.EndsWith(".talk.bin", StringComparison.OrdinalIgnoreCase))
-                {
-                    ScanTalkFile(bytes, deps);
+                    string fileName = kvp.Key;
+                    string virtualPath = $"/data/map/{mapFolder.Name}/{fileName}";
+
+                    if (fileName.EndsWith("_funcpt.bin", StringComparison.OrdinalIgnoreCase))
+                    {
+                        byte[] bytes = mapFolder.GetFileFromFullPath("/" + fileName);
+                        ScanFuncpointFile(bytes, deps, virtualPath);
+                    }
+                    else if (fileName.EndsWith(".talk.bin", StringComparison.OrdinalIgnoreCase))
+                    {
+                        byte[] bytes = mapFolder.GetFileFromFullPath("/" + fileName);
+                        ScanTalkFile(bytes, deps, virtualPath);
+                    }
                 }
             }
+
             return deps;
         }
 
-        private static void ScanFuncpointFile(byte[] bytes, MapProgressionDependencies deps)
+        private static void ScanFuncpointFile(byte[] bytes, MapProgressionDependencies deps, string virtualPath)
         {
-            try
-            {
-                var ptree = new CfgBin<PtreeNode>();
-                ptree.Open(bytes);
-                WalkPtree(ptree.Entries, deps);
-            }
-            catch
-            {
-                // Ignore malformed or empty ptree files
-            }
+            if (bytes == null || bytes.Length < 16)
+                return;
+
+            var cfg = new CfgBin<PtreeNode>();
+            cfg.Open(bytes);
+            if (cfg.Entries == null)
+                return;
+
+            WalkPtree(cfg.Entries, deps, virtualPath);
         }
 
-        private static void WalkPtree(PtreeNode node, MapProgressionDependencies deps)
+        private static void WalkPtree(PtreeNode node, MapProgressionDependencies deps, string virtualPath)
         {
             if (node == null)
                 return;
 
-            int? tboxBit = node.GetValueFromChild<int?>("TBoxBitCheck");
-            if (tboxBit.HasValue)
+            Entry entry = node.Item;
+            if (entry?.Variables != null && entry.Variables.Count >= 2)
             {
-                deps.ProtectedTBoxFlags.Add(tboxBit.Value);
-            }
-            else if (string.Equals(node.Header, "TBoxBitCheck", StringComparison.OrdinalIgnoreCase))
-            {
-                int? headerVal = node.GetValue<int?>(1);
-                if (headerVal.HasValue)
-                    deps.ProtectedTBoxFlags.Add(headerVal.Value);
-            }
+                // In Level-5 PTREE binaries:
+                // - PTVAL has Variables[0] = value, Variables[1] = key name
+                // - PTREE has Variables[0] = header key, Variables[1] = value
+                string keyName = null;
+                Variable valueVar = null;
 
-            int? itemId = node.GetValueFromChild<int?>("ItemID");
-            if (itemId.HasValue && itemId.Value != 0)
-            {
-                deps.ReferencedFuncptItemIds.Add(itemId.Value);
-            }
-            else if (string.Equals(node.Header, "ItemID", StringComparison.OrdinalIgnoreCase))
-            {
-                int? headerVal = node.GetValue<int?>(1);
-                if (headerVal.HasValue && headerVal.Value != 0)
-                    deps.ReferencedFuncptItemIds.Add(headerVal.Value);
+                if (string.Equals(entry.Name, "PTVAL", StringComparison.OrdinalIgnoreCase))
+                {
+                    keyName = entry.Variables[1].Value as string;
+                    valueVar = entry.Variables[0];
+                }
+                else if (string.Equals(entry.Name, "PTREE", StringComparison.OrdinalIgnoreCase))
+                {
+                    keyName = entry.Variables[0].Value as string;
+                    valueVar = entry.Variables[1];
+                }
+
+                if (string.Equals(keyName, "TBoxBitCheck", StringComparison.OrdinalIgnoreCase))
+                {
+                    int flag = Level5CfgValueParser.ReadHashOrIdOrThrow(
+                        valueVar,
+                        $"{virtualPath}:{entry.Name}(TBoxBitCheck)",
+                        out _);
+                    deps.ProtectedTBoxFlags.Add(flag);
+                }
+                else if (string.Equals(keyName, "ItemID", StringComparison.OrdinalIgnoreCase))
+                {
+                    int itemId = Level5CfgValueParser.ReadHashOrIdOrThrow(
+                        valueVar,
+                        $"{virtualPath}:{entry.Name}(ItemID)",
+                        out _);
+                    if (itemId != 0)
+                        deps.ReferencedFuncptItemIds.Add(itemId);
+                }
             }
 
             foreach (var child in node.Children)
             {
                 if (child is PtreeNode pChild)
                 {
-                    WalkPtree(pChild, deps);
+                    WalkPtree(pChild, deps, virtualPath);
                 }
             }
         }
 
-        private static void ScanTalkFile(byte[] bytes, MapProgressionDependencies deps)
+        /// <summary>
+        /// Parses <c>TALK_CONFIG</c> entries in <c>*.talk.bin</c> files.
+        /// Per <c>Ocelot/Models/MapEnum.cs</c> and <c>ie4cfgbin.cpp</c>, <c>Variables[0]</c> is <c>EventType</c>
+        /// and <c>Variables[1]</c> is polymorphic (<c>CfgValueType.Int</c> or <c>CfgValueType.String</c>):
+        /// <list type="bullet">
+        ///   <item><c>1</c> (<c>Text</c>): dialogue text CRC32/ID</item>
+        ///   <item><c>2, 3</c> (<c>UnkScript</c>, <c>Script</c>): event script hash or textual script ID</item>
+        ///   <item><c>4, 5</c> (<c>CommunityMaster</c>, <c>Shop</c>): recruitment/shop config ID</item>
+        ///   <item><c>6</c> (<c>ChangeMap</c>): destination map ID</item>
+        ///   <item><c>7</c> (<c>CompetitiveRoute</c>): route script identifier such as <c>"scr_br_0005_s"</c></item>
+        /// </list>
+        /// </summary>
+        public static void ScanTalkFile(byte[] bytes, MapProgressionDependencies deps, string virtualPath = "<talk.bin>")
         {
-            if (!TryOpenCfgTree(bytes, out var cfgBin))
+            if (bytes == null || bytes.Length < 16)
+                return;
+            if (!TryOpenCfgTree(bytes, out CfgBin<CfgTreeNode> cfg))
                 return;
 
-            var talkNodes = new List<(string EntryName, CfgTreeNode Node)>();
-            CollectMatchingNodes(cfgBin.Entries, n => n.Item?.Name == "TALK_CONFIG", talkNodes);
-
-            foreach (var (_, node) in talkNodes)
+            var talkNodes = FindEntriesByPrefix(cfg.Entries, "TALK_CONFIG");
+            for (int idx = 0; idx < talkNodes.Count; idx++)
             {
-                var vars = node.Item?.Variables;
+                var vars = talkNodes[idx].Item.Variables;
                 if (vars == null || vars.Count < 2)
                     continue;
 
-                int talkType = Convert.ToInt32(vars[0].Value);
-                int talkVal = Convert.ToInt32(vars[1].Value);
-                if ((talkType == 2 || talkType == 3) && talkVal != 0)
+                string contextPrefix = $"{virtualPath}:TALK_CONFIG[{idx}]";
+                int talkType = Level5CfgValueParser.ReadInt32OrThrow(vars[0], contextPrefix + ".TalkType");
+                int talkHashOrId = Level5CfgValueParser.ReadHashOrIdOrThrow(
+                    vars[1],
+                    contextPrefix + ".TalkValue",
+                    out string textualId);
+
+                switch (talkType)
                 {
-                    deps.ReferencedScriptHashes.Add(talkVal);
-                }
-                else if (talkType == 7 && talkVal != 0)
-                {
-                    deps.ReferencedRouteHashes.Add(talkVal);
+                    case 2:
+                    case 3:
+                        if (talkHashOrId != 0)
+                            deps.ReferencedScriptHashes.Add(talkHashOrId);
+                        if (!string.IsNullOrEmpty(textualId))
+                            deps.ReferencedScriptIds.Add(textualId);
+                        break;
+
+                    case 4:
+                    case 5:
+                        if (talkHashOrId != 0)
+                            deps.ReferencedShopHashes.Add(talkHashOrId);
+                        if (!string.IsNullOrEmpty(textualId))
+                            deps.ReferencedShopIds.Add(textualId);
+                        break;
+
+                    case 7:
+                        if (talkHashOrId != 0)
+                            deps.ReferencedRouteHashes.Add(talkHashOrId);
+                        if (!string.IsNullOrEmpty(textualId))
+                            deps.ReferencedRouteIds.Add(textualId);
+                        break;
                 }
             }
         }
 
-        private static IEnumerable<(string MapId, string VirtualPath, byte[] Bytes)> EnumerateMapBinaryFiles(VirtualDirectory archiveRoot)
+        private static bool IsCandidateMapCfgFile(string fileName)
         {
-            if (archiveRoot == null)
-                yield break;
+            if (string.IsNullOrEmpty(fileName))
+                return false;
 
-            foreach (string mapRootPath in MapRootCandidates)
+            if (!fileName.EndsWith(".bin", StringComparison.OrdinalIgnoreCase) &&
+                !fileName.EndsWith(".cfg.bin", StringComparison.OrdinalIgnoreCase))
             {
-                if (!archiveRoot.IsFolderExists(mapRootPath))
-                    continue;
-
-                VirtualDirectory mapRoot = archiveRoot.GetFolderFromFullPath(mapRootPath);
-                foreach (VirtualDirectory mapFolder in mapRoot.Folders)
-                {
-                    string mapId = mapFolder.Name;
-                    foreach (var kvp in mapFolder.Files)
-                    {
-                        if (!kvp.Key.EndsWith(".bin", StringComparison.OrdinalIgnoreCase))
-                            continue;
-
-                        string fullPath = $"{mapRootPath}/{mapId}/{kvp.Key}";
-                        byte[] data = archiveRoot.GetFileFromFullPath(fullPath);
-                        if (data != null && data.Length >= 16)
-                        {
-                            yield return (mapId, fullPath, data);
-                        }
-                    }
-                }
+                return false;
             }
+
+            if (fileName.EndsWith("_funcpt.bin", StringComparison.OrdinalIgnoreCase) ||
+                fileName.EndsWith(".npc.bin", StringComparison.OrdinalIgnoreCase) ||
+                fileName.EndsWith(".talk.bin", StringComparison.OrdinalIgnoreCase) ||
+                fileName.Contains("_es.cfg.bin", StringComparison.OrdinalIgnoreCase) ||
+                fileName.Contains("_en.cfg.bin", StringComparison.OrdinalIgnoreCase) ||
+                fileName.Contains("_fr.cfg.bin", StringComparison.OrdinalIgnoreCase) ||
+                fileName.Contains("_de.cfg.bin", StringComparison.OrdinalIgnoreCase) ||
+                fileName.Contains("_it.cfg.bin", StringComparison.OrdinalIgnoreCase) ||
+                fileName.Contains("_ja.cfg.bin", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return true;
         }
 
-        private static bool TryOpenCfgTree(byte[] bytes, out CfgBin<CfgTreeNode> cfgBin)
+        private static bool TryOpenCfgTree(byte[] data, out CfgBin<CfgTreeNode> cfg)
         {
-            cfgBin = null;
+            cfg = null;
             try
             {
                 var candidate = new CfgBin<CfgTreeNode>();
-                candidate.Open(bytes);
-                if (candidate.Entries != null && candidate.Entries.Children.Count > 0)
-                {
-                    cfgBin = candidate;
-                    return true;
-                }
+                candidate.Open(data);
+                if (candidate.Entries == null || candidate.Entries.Children.Count == 0)
+                    return false;
+
+                cfg = candidate;
+                return true;
             }
             catch
             {
-                // Not a CfgTreeNode binary (e.g., PTree or raw mesh/collision binary)
+                return false;
             }
-            return false;
         }
 
-        private static bool IsTBoxNode(CfgTreeNode node)
+        private static List<CfgTreeNode> FindEntriesByPrefix(CfgTreeNode root, string baseEntryName)
         {
-            string name = node.Item?.Name;
-            if (string.IsNullOrEmpty(name))
-                return false;
-            if (name.EndsWith("_BEGIN", StringComparison.OrdinalIgnoreCase) ||
-                name.EndsWith("_END", StringComparison.OrdinalIgnoreCase))
+            var found = new List<CfgTreeNode>();
+            if (root == null)
+                return found;
+
+            void Walk(CfgTreeNode current)
             {
-                return false;
-            }
-
-            if (KnownTBoxEntryNames.Contains(name))
-                return true;
-
-            // Structural check matching Ocelot's 9-field TBoxConfig:
-            // (int TBoxID, float X, float Z, float Y, float Rot, int ItemLight, int TBoxFlag, int TBoxType, int ItemShadow)
-            var vars = node.Item?.Variables;
-            if (vars != null && vars.Count == 9 && name.IndexOf("TBOX", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return vars[0].Type == CfgValueType.Int &&
-                       vars[1].Type == CfgValueType.Float &&
-                       vars[5].Type == CfgValueType.Int &&
-                       vars[8].Type == CfgValueType.Int;
-            }
-
-            return false;
-        }
-
-        private static bool IsEncountNode(CfgTreeNode node)
-        {
-            string name = node.Item?.Name;
-            if (string.IsNullOrEmpty(name))
-                return false;
-            if (name.EndsWith("_BEGIN", StringComparison.OrdinalIgnoreCase) ||
-                name.EndsWith("_END", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            if (KnownEncountEntryNames.Contains(name))
-                return node.Item?.Variables != null && node.Item.Variables.Count >= 20;
-
-            return false;
-        }
-
-        private static void CollectMatchingNodes(
-            CfgTreeNode current,
-            Func<CfgTreeNode, bool> predicate,
-            List<(string EntryName, CfgTreeNode Node)> output)
-        {
-            if (current == null)
-                return;
-
-            if (predicate(current))
-            {
-                output.Add((current.Item?.Name ?? string.Empty, current));
-            }
-
-            foreach (var child in current.Children)
-            {
-                if (child is CfgTreeNode cfgChild)
+                string name = current.Item?.Name;
+                if (!string.IsNullOrEmpty(name))
                 {
-                    CollectMatchingNodes(cfgChild, predicate, output);
+                    bool isBeginOrEnd = name.EndsWith("_BEGIN", StringComparison.OrdinalIgnoreCase) ||
+                                        name.EndsWith("_END", StringComparison.OrdinalIgnoreCase);
+                    if (!isBeginOrEnd &&
+                        (string.Equals(name, baseEntryName, StringComparison.OrdinalIgnoreCase) ||
+                         name.StartsWith(baseEntryName + "_", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        found.Add(current);
+                    }
+                }
+
+                foreach (var child in current.Children)
+                {
+                    if (child is CfgTreeNode cfgChild)
+                        Walk(cfgChild);
                 }
             }
+
+            Walk(root);
+            return found;
         }
 
         private static bool TryReadTBoxRecord(CfgTreeNode node, out TBoxConfigRecord record)
         {
             record = null;
-            var vars = node.Item?.Variables;
+            var vars = node?.Item?.Variables;
             if (vars == null || vars.Count < 9)
                 return false;
 
-            try
-            {
-                record = new TBoxConfigRecord
-                {
-                    TBoxID = Convert.ToInt32(vars[0].Value),
-                    LocationX = Convert.ToSingle(vars[1].Value),
-                    LocationZ = Convert.ToSingle(vars[2].Value),
-                    LocationY = Convert.ToSingle(vars[3].Value),
-                    Rotation = Convert.ToSingle(vars[4].Value),
-                    ItemIDLight = Convert.ToInt32(vars[5].Value),
-                    TBoxFlag = Convert.ToInt32(vars[6].Value),
-                    TboxType = Convert.ToInt32(vars[7].Value),
-                    ItemIDShadow = Convert.ToInt32(vars[8].Value)
-                };
-                return true;
-            }
-            catch
+            if (!Level5CfgValueParser.TryReadInt32(vars[0], out int tboxId) ||
+                !Level5CfgValueParser.TryReadSingle(vars[1], out float locX) ||
+                !Level5CfgValueParser.TryReadSingle(vars[2], out float locZ) ||
+                !Level5CfgValueParser.TryReadSingle(vars[3], out float locY) ||
+                !Level5CfgValueParser.TryReadSingle(vars[4], out float rot) ||
+                !Level5CfgValueParser.TryReadHashOrId(vars[5], out int itemLight, out _) ||
+                !Level5CfgValueParser.TryReadHashOrId(vars[6], out int tboxFlag, out _) ||
+                !Level5CfgValueParser.TryReadInt32(vars[7], out int tboxType) ||
+                !Level5CfgValueParser.TryReadHashOrId(vars[8], out int itemShadow, out _))
             {
                 return false;
             }
-        }
 
-        private static void WriteTBoxRecordInPlace(CfgTreeNode node, TBoxConfigRecord record)
-        {
-            var vars = node.Item.Variables;
-            vars[0].Value = record.TBoxID;
-            vars[1].Value = record.LocationX;
-            vars[2].Value = record.LocationZ;
-            vars[3].Value = record.LocationY;
-            vars[4].Value = record.Rotation;
-            vars[5].Value = record.ItemIDLight;
-            vars[6].Value = record.TBoxFlag;
-            vars[7].Value = record.TboxType;
-            vars[8].Value = record.ItemIDShadow;
+            record = new TBoxConfigRecord
+            {
+                TBoxID = tboxId,
+                LocationX = locX,
+                LocationZ = locZ,
+                LocationY = locY,
+                Rotation = rot,
+                ItemIDLight = itemLight,
+                TBoxFlag = tboxFlag,
+                TboxType = tboxType,
+                ItemIDShadow = itemShadow
+            };
+            return true;
         }
 
         private static bool TryReadEncountRecord(CfgTreeNode node, out EncountMapRecord record)
         {
             record = null;
-            var vars = node.Item?.Variables;
-            if (vars == null || vars.Count < 21)
+            var vars = node?.Item?.Variables;
+            if (vars == null || vars.Count < 22)
                 return false;
 
-            try
-            {
-                record = new EncountMapRecord
-                {
-                    ChasePlayer = Convert.ToInt32(vars[0].Value),
-                    TeamID = Convert.ToInt32(vars[1].Value),
-                    Unk2 = Convert.ToInt32(vars[2].Value),
-                    LocationX = Convert.ToSingle(vars[3].Value),
-                    LocationZ = Convert.ToSingle(vars[4].Value),
-                    LocationY = Convert.ToSingle(vars[5].Value),
-                    Unk6 = Convert.ToInt32(vars[6].Value),
-                    Unk7 = Convert.ToInt32(vars[7].Value),
-                    Rotation = Convert.ToSingle(vars[8].Value),
-                    TextIDAsk = Convert.ToInt32(vars[9].Value),
-                    TextIDWait = Convert.ToInt32(vars[10].Value),
-                    Condition = vars[11].Value?.ToString() ?? string.Empty,
-                    PlayerID1 = Convert.ToInt32(vars[12].Value),
-                    PlayerID2 = Convert.ToInt32(vars[13].Value),
-                    PlayerID3 = Convert.ToInt32(vars[14].Value),
-                    PlayerID4 = Convert.ToInt32(vars[15].Value),
-                    PlayerID5 = Convert.ToInt32(vars[16].Value),
-                    Uniform = Convert.ToInt32(vars[17].Value),
-                    Boots = Convert.ToInt32(vars[18].Value),
-                    TextIDLost = Convert.ToInt32(vars[19].Value),
-                    TextIDWin = Convert.ToInt32(vars[20].Value),
-                    Unk21 = vars.Count > 21 ? Convert.ToInt32(vars[21].Value) : 0
-                };
-                return true;
-            }
-            catch
+            if (!Level5CfgValueParser.TryReadHashOrId(vars[0], out int chasePlayer, out _) ||
+                !Level5CfgValueParser.TryReadHashOrId(vars[1], out int teamId, out _) ||
+                !Level5CfgValueParser.TryReadInt32(vars[2], out int unk2) ||
+                !Level5CfgValueParser.TryReadSingle(vars[3], out float locX) ||
+                !Level5CfgValueParser.TryReadSingle(vars[4], out float locZ) ||
+                !Level5CfgValueParser.TryReadSingle(vars[5], out float locY) ||
+                !Level5CfgValueParser.TryReadInt32(vars[6], out int unk6) ||
+                !Level5CfgValueParser.TryReadInt32(vars[7], out int unk7) ||
+                !Level5CfgValueParser.TryReadSingle(vars[8], out float rot) ||
+                !Level5CfgValueParser.TryReadHashOrId(vars[9], out int textAsk, out _) ||
+                !Level5CfgValueParser.TryReadHashOrId(vars[10], out int textWait, out _) ||
+                !Level5CfgValueParser.TryReadHashOrId(vars[12], out int pid1, out _) ||
+                !Level5CfgValueParser.TryReadHashOrId(vars[13], out int pid2, out _) ||
+                !Level5CfgValueParser.TryReadHashOrId(vars[14], out int pid3, out _) ||
+                !Level5CfgValueParser.TryReadHashOrId(vars[15], out int pid4, out _) ||
+                !Level5CfgValueParser.TryReadHashOrId(vars[16], out int pid5, out _) ||
+                !Level5CfgValueParser.TryReadHashOrId(vars[17], out int uniform, out _) ||
+                !Level5CfgValueParser.TryReadHashOrId(vars[18], out int boots, out _) ||
+                !Level5CfgValueParser.TryReadHashOrId(vars[19], out int textLost, out _) ||
+                !Level5CfgValueParser.TryReadHashOrId(vars[20], out int textWin, out _) ||
+                !Level5CfgValueParser.TryReadInt32(vars[21], out int unk21))
             {
                 return false;
             }
-        }
 
-        private static void WriteEncountRecordInPlace(CfgTreeNode node, EncountMapRecord record)
-        {
-            var vars = node.Item.Variables;
-            vars[1].Value = record.TeamID;
-            vars[12].Value = record.PlayerID1;
-            vars[13].Value = record.PlayerID2;
-            vars[14].Value = record.PlayerID3;
-            vars[15].Value = record.PlayerID4;
-            vars[16].Value = record.PlayerID5;
-            vars[17].Value = record.Uniform;
-            vars[18].Value = record.Boots;
+            record = new EncountMapRecord
+            {
+                ChasePlayer = chasePlayer,
+                TeamID = teamId,
+                Unk2 = unk2,
+                LocationX = locX,
+                LocationZ = locZ,
+                LocationY = locY,
+                Unk6 = unk6,
+                Unk7 = unk7,
+                Rotation = rot,
+                TextIDAsk = textAsk,
+                TextIDWait = textWait,
+                Condition = Level5CfgValueParser.ReadStringOrCondition(vars[11]),
+                PlayerID1 = pid1,
+                PlayerID2 = pid2,
+                PlayerID3 = pid3,
+                PlayerID4 = pid4,
+                PlayerID5 = pid5,
+                Uniform = uniform,
+                Boots = boots,
+                TextIDLost = textLost,
+                TextIDWin = textWin,
+                Unk21 = unk21
+            };
+            return true;
         }
     }
 }

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using IEGORandomizer.Engine.Configuration;
+using Lynx.Core.Binary;
 using Lynx.Core.Games;
 using Lynx.Core.Maps;
 using Lynx.Core.RomFs;
@@ -45,6 +47,9 @@ namespace IEGORandomizer.Engine.Protection
         /// <summary>Map <c>TBoxFlag</c> IDs gated by <c>FUNCPOINT</c> <c>TBoxBitCheck</c> triggers.</summary>
         public HashSet<int> ProtectedTBoxFlags { get; } = new();
 
+        /// <summary>Map progression &amp; <c>TALK_CONFIG</c> dependencies (including textual route IDs such as <c>"scr_br_0005_s"</c>).</summary>
+        public MapProgressionDependencies MapDependencies { get; set; } = new();
+
         public NutbAuditReport NutbAudit { get; set; } = new();
         public int CuratedProtectedPlayersCount { get; set; }
 
@@ -55,27 +60,15 @@ namespace IEGORandomizer.Engine.Protection
     /// Builds and allows extension of <see cref="StoryProtectionContext"/> for Inazuma Eleven GO: Luz y Sombra.
     /// Combines curated IEGO1 story knowledge (verified against <c>PlayerHeads.cs</c>, <c>PlayablePhase.cs</c>,
     /// and <c>projectz</c>), dynamic <c>ITEM_IMPORTANT</c> &amp; route-ticket inspection, map <c>FUNCPOINT</c>
-    /// <c>TBoxBitCheck</c> scanning, and Squirrel 2.2.3 (<c>.nutb</c>) bytecode literal auditing.
+    /// <c>TBoxBitCheck</c> &amp; <c>TALK_CONFIG</c> scanning, and Squirrel 2.2.3 (<c>.nutb</c>) bytecode literal auditing.
     /// </summary>
     public sealed class StoryProtectionService
     {
-        /// <summary>
-        /// Core Raimon story roster &amp; temporary chapter members in IEGO1 (verified in PlayerHeads.cs):
-        /// cp0001 Samguk, cp0002 Subaru, cp0003 Gabriel, cp0004 Wanli, cp0005 JP, cp0006 Adé,
-        /// cp0007 Eugene, cp0008 Arion, cp0009 Riccardo, cp0010 Victor, cp0011 Michael,
-        /// cp0012 Lars (leaves Ch.2), cp0013 Doug (leaves early), cp0014 Sven (leaves early),
-        /// cp0015 Aitor, cp0016 Ryoma, cp0017 Lucian, cp0026 Shunsuke, cp0029 Hugues,
-        /// cp0290 Sol Daystar, cp0350 Bailong (Light), cp0370 Tezcat (Shadow).
-        /// </summary>
         private static readonly int[] CuratedCoreStoryModelNumbers =
         {
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 26, 29, 290, 350, 370
         };
 
-        /// <summary>
-        /// Story protagonists whose Fighting Spirits are awakened/commanded in scripted story matches:
-        /// JP (cp0005), Arion (cp0008), Riccardo (cp0009), Victor (cp0010), Sol (cp0290), Bailong (cp0350), Tezcat (cp0370).
-        /// </summary>
         private static readonly int[] StoryAvatarBearers =
         {
             5, 8, 9, 10, 290, 350, 370
@@ -100,7 +93,7 @@ namespace IEGORandomizer.Engine.Protection
 
             var ctx = new StoryProtectionContext();
 
-            // 1. Always protect Key Items (ITEM_IMPORTANT + Category 14 + ItemRef 80 + Route Locks)
+            // 1. Always protect Key Items (ITEM_IMPORTANT + Category 14 + Category 15 + ItemRef 80 + Route Locks)
             if (options.ProtectKeyItemsAndFuncpointChests)
             {
                 var importantItems = game.GetItems("important") ?? Array.Empty<IItemConfig>();
@@ -120,22 +113,40 @@ namespace IEGORandomizer.Engine.Protection
                     }
                 }
 
+                // Scan map FUNCPOINT TBoxBitCheck, ItemID, and TALK_CONFIG dependencies (e.g. "scr_br_0005_s")
+                var mapDeps = MapDataService.ScanMapProgressionDependencies(game.IE_A.Directory);
+                ctx.MapDependencies = mapDeps;
+
+                foreach (int flag in mapDeps.ProtectedTBoxFlags)
+                    ctx.ProtectedTBoxFlags.Add(flag);
+                foreach (int itemId in mapDeps.ReferencedFuncptItemIds)
+                    ctx.ProtectedItemHashes.Add(itemId);
+
                 // Protect route-unlocking tickets referenced by MatchRestriction in any competition route
                 var soccerDir = game.GetDirectory("soccer");
                 if (soccerDir != null)
                 {
-                    foreach (string fileName in soccerDir.Files.Keys)
-                    {
-                        if (!fileName.EndsWith(".cfg.bin", StringComparison.OrdinalIgnoreCase) ||
-                            string.Equals(fileName, "soccer_config.cfg.bin", StringComparison.OrdinalIgnoreCase))
-                        {
-                            continue;
-                        }
+                    var candidateRoutes = new HashSet<string>(
+                        soccerDir.Files.Keys.Where(f =>
+                            f.EndsWith(".cfg.bin", StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(f, "soccer_config.cfg.bin", StringComparison.OrdinalIgnoreCase)),
+                        StringComparer.OrdinalIgnoreCase);
 
-                        try
+                    // Also ensure every route explicitly referenced by map TALK_CONFIG (e.g. "scr_br_0005_s") is checked
+                    foreach (string routeId in mapDeps.ReferencedRouteIds)
+                    {
+                        string routeFile = routeId.EndsWith(".cfg.bin", StringComparison.OrdinalIgnoreCase)
+                            ? routeId
+                            : routeId + ".cfg.bin";
+                        if (soccerDir.Files.ContainsKey(routeFile))
+                            candidateRoutes.Add(routeFile);
+                    }
+
+                    foreach (string fileName in candidateRoutes.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+                    {
+                        if (RouteDataService.TryReadRouteFile(soccerDir, fileName, out RouteFileData routeData))
                         {
-                            var (cells, _) = game.GetRoutes("/" + fileName.TrimStart('/'));
-                            foreach (var cell in cells)
+                            foreach (var cell in routeData.Cells)
                             {
                                 if (cell.MatchRestriction != 0)
                                 {
@@ -143,19 +154,8 @@ namespace IEGORandomizer.Engine.Protection
                                 }
                             }
                         }
-                        catch
-                        {
-                            // Non-route soccer cfg.bin; skip safely
-                        }
                     }
                 }
-
-                // Scan map FUNCPOINT TBoxBitCheck & ItemID dependencies
-                var mapDeps = MapDataService.ScanMapProgressionDependencies(game.IE_A.Directory);
-                foreach (int flag in mapDeps.ProtectedTBoxFlags)
-                    ctx.ProtectedTBoxFlags.Add(flag);
-                foreach (int itemId in mapDeps.ReferencedFuncptItemIds)
-                    ctx.ProtectedItemHashes.Add(itemId);
             }
 
             foreach (string extraItem in _extraProtectedItemCodes)
@@ -168,7 +168,6 @@ namespace IEGORandomizer.Engine.Protection
             {
                 foreach (int modelNum in CuratedCoreStoryModelNumbers)
                 {
-                    // Edition-specific postgame/story rivals
                     if (modelNum == 350 && edition == GameEdition.Shadow)
                         continue;
                     if (modelNum == 370 && edition == GameEdition.Light)
@@ -187,7 +186,8 @@ namespace IEGORandomizer.Engine.Protection
                 foreach (string extraCp in _extraProtectedPlayerCodes)
                 {
                     string clean = extraCp.Trim().ToLowerInvariant();
-                    if (clean.StartsWith("cp") && int.TryParse(clean.Substring(2), out int num))
+                    if (clean.StartsWith("cp", StringComparison.Ordinal) &&
+                        int.TryParse(clean.Substring(2), NumberStyles.Integer, CultureInfo.InvariantCulture, out int num))
                     {
                         RegisterProtectedPlayerModel(ctx, num);
                     }
@@ -202,13 +202,13 @@ namespace IEGORandomizer.Engine.Protection
 
                 foreach (string charCode in nutb.ReferencedCharacterIds)
                 {
-                    if (charCode.StartsWith("para_cp"))
+                    if (charCode.StartsWith("para_cp", StringComparison.Ordinal))
                     {
                         ctx.ProtectedStoryPlayerParamHashes.Add(Level5IdHelper.ComputeCrc32Utf8(charCode));
                         string cp = charCode.Substring("para_".Length);
                         ctx.ProtectedStoryPlayerBaseHashes.Add(Level5IdHelper.ComputeCrc32Utf8(cp));
                     }
-                    else if (charCode.StartsWith("cp"))
+                    else if (charCode.StartsWith("cp", StringComparison.Ordinal))
                     {
                         ctx.ProtectedStoryPlayerBaseHashes.Add(Level5IdHelper.ComputeCrc32Utf8(charCode));
                         ctx.ProtectedStoryPlayerParamHashes.Add(Level5IdHelper.ComputeCrc32Utf8("para_" + charCode));
@@ -237,7 +237,7 @@ namespace IEGORandomizer.Engine.Protection
 
                 foreach (string teamCode in nutb.ReferencedTeamIds)
                 {
-                    if (teamCode.StartsWith("para_"))
+                    if (teamCode.StartsWith("para_", StringComparison.Ordinal))
                         ctx.ScriptedTeamParamHashes.Add(Level5IdHelper.ComputeCrc32Utf8(teamCode));
                     else
                         ctx.ScriptedTeamConfigHashes.Add(Level5IdHelper.ComputeCrc32Utf8(teamCode));

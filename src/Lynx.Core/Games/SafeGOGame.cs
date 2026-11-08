@@ -2,19 +2,24 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Lynx.Core.Binary;
 using Lynx.Core.RomFs;
 using Lynx.InazumaEleven.Games;
 using Lynx.InazumaEleven.Games.GO;
 using Lynx.InazumaEleven.Logic;
 using StudioElevenLib.Level5.Archive.ARC0;
+using StudioElevenLib.Level5.Binary;
+using StudioElevenLib.Level5.Binary.Collections;
 using static Lynx.InazumaEleven.Games.GO.GOSupport;
 
 namespace Lynx.Core.Games
 {
     /// <summary>
     /// Safe, cross-platform subclass of <see cref="Game"/> for Inazuma Eleven GO Light &amp; Shadow.
-    /// Reuses 100% of Lynx's binary mappers, logic interfaces, and stat calculator while opening
-    /// <c>ie_a.fa</c> strictly read-only and blocking destructive in-place <see cref="Save()"/> calls.
+    /// Opens <c>ie_a.fa</c> strictly read-only, blocks destructive in-place <see cref="Save()"/> calls,
+    /// and routes all <c>.cfg.bin</c> reads and writes through <see cref="Level5CfgBinAdapter"/> so
+    /// polymorphic Level-5 <c>cfgBinArgReadHash</c> (<c>0x0012CFF0</c>) string/CRC32 identifiers and
+    /// retail <c>CfgValueType</c> tags are preserved without data loss.
     /// </summary>
     public sealed class SafeGOGame : Game, IDisposable
     {
@@ -134,23 +139,248 @@ namespace Lynx.Core.Games
             Arc0SafeArchive.SaveCopyTo(IE_A, destinationIeAFaPath, SourceArchivePath, progress);
         }
 
-        /// <summary>
-        /// Returns only STORY_TEAM_INFO records (disambiguating IStoryTeamInfo : IEncountTeamInfo).
-        /// </summary>
-        public IStoryTeamInfo[] GetStoryTeamsOnly()
+        public new ICharabase[] GetCharabase()
         {
-            return GetTeamConfig().OfType<IStoryTeamInfo>().ToArray();
+            var cfg = OpenCfgFile("chara_base");
+            return Level5CfgBinAdapter.ReadEntries<CharaBase>(cfg.Entries, "CHARA_BASE_INFO", "chara_base.cfg.bin")
+                .Cast<ICharabase>()
+                .ToArray();
         }
 
-        /// <summary>
-        /// Returns only ENCOUNT_TEAM_INFO records, excluding IStoryTeamInfo subclasses.
-        /// </summary>
+        public new void SaveCharaBase(ICharabase[] charabase)
+        {
+            var cfg = OpenCfgFile("chara_base");
+            Level5CfgBinAdapter.UpdateEntriesInPlace(
+                cfg.Entries,
+                "CHARA_BASE_INFO_BEGIN",
+                "CHARA_BASE_INFO",
+                charabase,
+                "chara_base.cfg.bin");
+            GetFile("chara_base").ByteContent = cfg.Save();
+        }
+
+        public new ICharaparam[] GetCharaparams()
+        {
+            var cfg = OpenCfgFile("chara_param");
+            return Level5CfgBinAdapter.ReadEntries<CharaParam>(cfg.Entries, "CHARA_PARAM_INFO", "chara_param.cfg.bin")
+                .Cast<ICharaparam>()
+                .ToArray();
+        }
+
+        public new void SaveCharaparams(ICharaparam[] charaparams)
+        {
+            var cfg = OpenCfgFile("chara_param");
+            Level5CfgBinAdapter.UpdateEntriesInPlace(
+                cfg.Entries,
+                "CHARA_PARAM_INFO_BEGIN",
+                "CHARA_PARAM_INFO",
+                charaparams,
+                "chara_param.cfg.bin");
+            GetFile("chara_param").ByteContent = cfg.Save();
+        }
+
+        public new ISkillConfig[] GetSkillConfigs(bool emptySkillConfig = false)
+        {
+            var cfg = OpenCfgFile("skill_config");
+            var list = Level5CfgBinAdapter.ReadEntries<SkillConfig>(cfg.Entries, "SKILL_CONFIG_INFO", "skill_config.cfg.bin")
+                .Cast<ISkillConfig>()
+                .ToList();
+
+            if (emptySkillConfig)
+            {
+                list.Add(new SkillConfig());
+            }
+
+            return list.ToArray();
+        }
+
+        public new void SaveSkillConfigs(ISkillConfig[] skills)
+        {
+            var cfg = OpenCfgFile("skill_config");
+            Level5CfgBinAdapter.UpdateEntriesInPlace(
+                cfg.Entries,
+                "SKILL_CONFIG_INFO_BEGIN",
+                "SKILL_CONFIG_INFO",
+                skills,
+                "skill_config.cfg.bin");
+            GetFile("skill_config").ByteContent = cfg.Save();
+        }
+
+        public new ISkillTable[] GetSkillTable()
+        {
+            var cfg = OpenCfgFile("skill_table");
+            return Level5CfgBinAdapter.ReadEntries<SkillTable>(cfg.Entries, "SKILL_TABLE", "skill_table.cfg.bin")
+                .Cast<ISkillTable>()
+                .ToArray();
+        }
+
+        public new void SaveSkillTable(ISkillTable[] skilltable)
+        {
+            var cfg = OpenCfgFile("skill_table");
+            Level5CfgBinAdapter.UpdateEntriesInPlace(
+                cfg.Entries,
+                "SKILL_TABLE_BEGIN",
+                "SKILL_TABLE",
+                skilltable,
+                "skill_table.cfg.bin");
+            GetFile("skill_table").ByteContent = cfg.Save();
+        }
+
+        public new IAvatar[] GetAvatars(bool emptyAvatar = false)
+        {
+            var cfg = OpenCfgFile("item_config");
+            var list = Level5CfgBinAdapter.ReadEntries<Avatar>(cfg.Entries, "ITEM_AVATAR", "item_config.cfg.bin")
+                .Cast<IAvatar>()
+                .ToList();
+
+            if (emptyAvatar)
+            {
+                list.Add(new Avatar());
+            }
+
+            return list.ToArray();
+        }
+
+        public new void SaveAvatars(IAvatar[] avatars)
+        {
+            var cfg = OpenCfgFile("item_config");
+            CfgTreeNode avatarBegin = cfg.Entries.FindByName("ITEM_AVATAR_BEGIN");
+            int existingCount = avatarBegin?.Children.OfType<CfgTreeNode>().Count(c => c.Item?.Name == "ITEM_AVATAR") ?? 0;
+
+            if (avatarBegin != null && existingCount == avatars.Length)
+            {
+                Level5CfgBinAdapter.UpdateEntriesInPlace(
+                    cfg.Entries,
+                    "ITEM_AVATAR_BEGIN",
+                    "ITEM_AVATAR",
+                    avatars,
+                    "item_config.cfg.bin");
+                GetFile("item_config").ByteContent = cfg.Save();
+                return;
+            }
+
+            base.SaveAvatars(avatars);
+        }
+
+        public new ISoccerInfo[] GetSoccers()
+        {
+            var cfg = OpenCfgFile("soccer_config");
+            return Level5CfgBinAdapter.ReadEntries<SoccerInfo>(cfg.Entries, "SOCCER_INFO", "soccer_config.cfg.bin")
+                .Cast<ISoccerInfo>()
+                .ToArray();
+        }
+
+        public new ITeamParamInfo[] GetTeamParams()
+        {
+            var cfg = OpenCfgFile("team_param");
+            return Level5CfgBinAdapter.ReadEntries<TeamParamInfo>(cfg.Entries, "TEAM_PARAM_INFO", "team_param.cfg.bin")
+                .Cast<ITeamParamInfo>()
+                .ToArray();
+        }
+
+        public new void SaveTeamParams(ITeamParamInfo[] teams)
+        {
+            var cfg = OpenCfgFile("team_param");
+            Level5CfgBinAdapter.UpdateEntriesInPlace(
+                cfg.Entries,
+                "TEAM_PARAM_INFO_BEGIN",
+                "TEAM_PARAM_INFO",
+                teams,
+                "team_param.cfg.bin");
+            GetFile("team_param").ByteContent = cfg.Save();
+        }
+
+        public IStoryTeamInfo[] GetStoryTeamsOnly()
+        {
+            var cfg = OpenCfgFile("team_config");
+            return Level5CfgBinAdapter.ReadEntries<StoryTeamInfo>(cfg.Entries, "STORY_TEAM_INFO", "team_config.cfg.bin")
+                .Cast<IStoryTeamInfo>()
+                .ToArray();
+        }
+
         public IEncountTeamInfo[] GetEncounterTeamsOnly()
         {
-            return GetTeamConfig()
-                .Where(t => t is IEncountTeamInfo && !(t is IStoryTeamInfo))
+            var cfg = OpenCfgFile("team_config");
+            return Level5CfgBinAdapter.ReadEntries<EncountTeamInfo>(cfg.Entries, "ENCOUNT_TEAM_INFO", "team_config.cfg.bin")
                 .Cast<IEncountTeamInfo>()
                 .ToArray();
+        }
+
+        public new void SaveTeamConfig(IStoryTeamInfo[] storyTeams, IEncountTeamInfo[] encounterTeams)
+        {
+            var cfg = OpenCfgFile("team_config");
+            Level5CfgBinAdapter.UpdateEntriesInPlace(
+                cfg.Entries,
+                "STORY_TEAM_INFO_BEGIN",
+                "STORY_TEAM_INFO",
+                storyTeams,
+                "team_config.cfg.bin");
+            Level5CfgBinAdapter.UpdateEntriesInPlace(
+                cfg.Entries,
+                "ENCOUNT_TEAM_INFO_BEGIN",
+                "ENCOUNT_TEAM_INFO",
+                encounterTeams,
+                "team_config.cfg.bin");
+            GetFile("team_config").ByteContent = cfg.Save();
+        }
+
+        public new IItemConfig[] GetItems(string itemType)
+        {
+            var cfg = OpenCfgFile("item_config");
+            const string ctx = "item_config.cfg.bin";
+
+            return itemType switch
+            {
+                "equipment" => Level5CfgBinAdapter.ReadEntries<ItemConfig>(cfg.Entries, "ITEM_EQUIPMENT", ctx).Cast<IItemConfig>().ToArray(),
+                "consumable" => Level5CfgBinAdapter.ReadEntries<ItemConfig>(cfg.Entries, "ITEM_CONSUME", ctx).Cast<IItemConfig>().ToArray(),
+                "important" => Level5CfgBinAdapter.ReadEntries<ItemConfig>(cfg.Entries, "ITEM_IMPORTANT", ctx).Cast<IItemConfig>().ToArray(),
+                "uniform" => Level5CfgBinAdapter.ReadEntries<ItemConfigUniform>(cfg.Entries, "ITEM_UNIFORM", ctx).Cast<IItemConfig>().ToArray(),
+                "kizunax" => Level5CfgBinAdapter.ReadEntries<ItemConfigPalpackCard>(cfg.Entries, "ITEM_KIZUNAX", ctx).Cast<IItemConfig>().ToArray(),
+                "avatar" => Level5CfgBinAdapter.ReadEntries<ItemConfigAvatar>(cfg.Entries, "ITEM_AVATAR", ctx).Cast<IItemConfig>().ToArray(),
+                "director" => Level5CfgBinAdapter.ReadEntries<ItemConfigDirector>(cfg.Entries, "ITEM_DIRECTOR", ctx).Cast<IItemConfig>().ToArray(),
+                "all" => Level5CfgBinAdapter.ReadEntries<ItemConfig>(cfg.Entries, "ITEM_EQUIPMENT", ctx).Cast<IItemConfig>()
+                    .Concat(Level5CfgBinAdapter.ReadEntries<ItemConfig>(cfg.Entries, "ITEM_CONSUME", ctx))
+                    .Concat(Level5CfgBinAdapter.ReadEntries<ItemConfig>(cfg.Entries, "ITEM_IMPORTANT", ctx))
+                    .Concat(Level5CfgBinAdapter.ReadEntries<ItemConfigAvatar>(cfg.Entries, "ITEM_AVATAR", ctx))
+                    .Concat(Level5CfgBinAdapter.ReadEntries<ItemConfigDirector>(cfg.Entries, "ITEM_DIRECTOR", ctx))
+                    .Concat(Level5CfgBinAdapter.ReadEntries<ItemConfigUniform>(cfg.Entries, "ITEM_UNIFORM", ctx))
+                    .Concat(Level5CfgBinAdapter.ReadEntries<ItemConfigPalpackCard>(cfg.Entries, "ITEM_KIZUNAX", ctx))
+                    .ToArray(),
+                _ => null
+            };
+        }
+
+        public new void SaveItems<T>(T[] items) where T : class, IItemConfig
+        {
+            if (typeof(T) == typeof(ItemConfigPalpackCard))
+            {
+                var cfg = OpenCfgFile("item_config");
+                CfgTreeNode kizunaxBegin = cfg.Entries.FindByName("ITEM_KIZUNAX_BEGIN");
+                int existingCount = kizunaxBegin?.Children.OfType<CfgTreeNode>().Count(c => c.Item?.Name == "ITEM_KIZUNAX") ?? 0;
+
+                if (kizunaxBegin != null && existingCount == items.Length)
+                {
+                    Level5CfgBinAdapter.UpdateEntriesInPlace(
+                        cfg.Entries,
+                        "ITEM_KIZUNAX_BEGIN",
+                        "ITEM_KIZUNAX",
+                        items,
+                        "item_config.cfg.bin");
+                    GetFile("item_config").ByteContent = cfg.Save();
+                    return;
+                }
+            }
+
+            base.SaveItems(items);
+        }
+
+        private CfgBin<CfgTreeNode> OpenCfgFile(string fileKey)
+        {
+            byte[] content = GetFileContent(fileKey)
+                ?? throw new FileNotFoundException($"Required game table '{fileKey}' not found in ie_a.fa.");
+            var cfg = new CfgBin<CfgTreeNode>();
+            cfg.Open(content);
+            return cfg;
         }
 
         public static IReadOnlyList<string> DetectAvailableLanguageCodes(ARC0 archive)
