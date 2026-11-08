@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IEGO Randomizer — Inazuma Eleven GO: Luz y Sombra</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-emblem">⚡</div>
+        <div>
+          <h1>IEGO Randomizer</h1>
+          <p class="subtitle">Generador determinista para <strong>Inazuma Eleven GO: Luz y Sombra</strong> (PC / Citra / LayeredFS)</p>
+        </div>
+      </div>
+      <div class="safety-pill" title="El archivo original jamás se modifica; toda salida se escribe en una carpeta separada.">
+        🛡️ Archivo original 100% protegido (Solo lectura)
+      </div>
+    </header>
+
+    <main class="workspace-grid">
+      <!-- Left Column: Input, Seed, Edition, Export -->
+      <section class="panel-column">
+        <div class="card">
+          <div class="card-header">
+            <h2>1. Archivos del Juego y Destino</h2>
+            <span class="tag">PC Local</span>
+          </div>
+
+          <label class="field-label" for="inputPath">Entrada del juego (<code>.3ds</code> desencriptado, carpeta <code>RomFS</code> o <code>ie_a.fa</code>)</label>
+          <div class="input-row">
+            <input id="inputPath" type="text" placeholder="Ej: C:\Juegos\IEGO\ie_a.fa o RomFS..." autocomplete="off" />
+            <button type="button" class="btn btn-secondary" id="btnPickInputFile">Archivo…</button>
+            <button type="button" class="btn btn-secondary" id="btnPickInputFolder">Carpeta…</button>
+          </div>
+          <div id="inputInspectBadge" class="inspect-status neutral">
+            Selecciona una entrada para verificar formato, edición y protección de lectura.
+          </div>
+
+          <div class="two-col">
+            <div>
+              <label class="field-label" for="editionSelect">Edición del juego</label>
+              <select id="editionSelect">
+                <option value="Auto">Detectar automáticamente (Luz por defecto en ie_a.fa)</option>
+                <option value="Light">Inazuma Eleven GO: Luz (0004000000112F00)</option>
+                <option value="Shadow">Inazuma Eleven GO: Sombra (0004000000113000)</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label" for="titleIdOverride">Title ID LayeredFS (opcional)</label>
+              <select id="titleIdOverride">
+                <option value="">Automático según edición / cabecera .3ds</option>
+                <option value="0004000000112F00">Luz EUR — 0004000000112F00</option>
+                <option value="0004000000113000">Sombra EUR (Estándar) — 0004000000113000</option>
+                <option value="000400000017C200">Sombra EUR (Alt/Rev) — 000400000017C200</option>
+              </select>
+            </div>
+          </div>
+
+          <label class="field-label" for="outputDir">Carpeta de salida (independiente del archivo original)</label>
+          <div class="input-row">
+            <input id="outputDir" type="text" placeholder="Ej: C:\Juegos\IEGO_Randomizer_Output\Run_01" autocomplete="off" />
+            <button type="button" class="btn btn-secondary" id="btnPickOutputFolder">Elegir carpeta…</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2>2. Semilla (Seed) y Modo a Ciegas</h2>
+            <span class="tag tag-accent">Determinista</span>
+          </div>
+
+          <label class="field-label" for="seedInput">Semilla reproducible</label>
+          <div class="input-row">
+            <input id="seedInput" type="text" placeholder="Vacío = generar automáticamente" autocomplete="off" />
+            <button type="button" class="btn btn-secondary" id="btnRandomSeed">🎲 Aleatoria</button>
+            <button type="button" class="btn btn-ghost" id="btnCopySeed" title="Copiar semilla">Copiar</button>
+          </div>
+
+          <div class="blind-banner">
+            <label class="toggle-row strong-toggle">
+              <input type="checkbox" id="optBlindPlay" checked />
+              <span>
+                <strong>Modo Partida a Ciegas (Sin Spoilers)</strong>
+                <small>Oculta asignaciones concretas en pantalla y evita generar <code>spoiler_log.txt</code> para jugar totalmente a ciegas.</small>
+              </span>
+            </label>
+          </div>
+
+          <div class="preset-bar">
+            <span>Perfiles rápidos:</span>
+            <button type="button" class="btn btn-chip" data-preset="balanced">Equilibrado Recomendado</button>
+            <button type="button" class="btn btn-chip" data-preset="full">Randomización Completa Segura</button>
+            <button type="button" class="btn btn-chip" data-preset="players">Solo Jugadores y Fichajes</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2>3. Formatos de Exportación</h2>
+            <span class="tag">Sin tocar consola</span>
+          </div>
+          <div class="check-grid">
+            <label class="toggle-row">
+              <input type="checkbox" id="expCitra" checked />
+              <span><strong>Estructura Mod Citra</strong><small><code>Citra/load/mods/{TitleID}/romfs/ie_a.fa</code></small></span>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" id="expLayeredFs" checked />
+              <span><strong>Estructura Luma3DS LayeredFS</strong><small><code>Luma3DS/luma/titles/{TitleID}/romfs/ie_a.fa</code></small></span>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" id="expStandalone" checked />
+              <span><strong>Archivo <code>ie_a.fa</code> suelto</strong><small><code>Standalone/ie_a.fa</code></small></span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Column: Subsystems & Execution -->
+      <section class="panel-column">
+        <div class="card">
+          <div class="card-header">
+            <h2>4. Categorías a Randomizar</h2>
+            <span class="tag">Subgeneradores aislados</span>
+          </div>
+
+          <!-- A. Players -->
+          <div class="subsystem-box">
+            <label class="subsystem-title">
+              <input type="checkbox" id="playersEnabled" checked />
+              <span>⚽ A. Jugadores y Fichajes</span>
+            </label>
+            <div class="subsystem-options" id="playersGroup">
+              <label><input type="checkbox" id="plRosters" checked /> Equipos de historia/rutas (Derangement sin repetirse en origen)</label>
+              <label><input type="checkbox" id="plPachangas" checked /> Jugadores de pachangas + sincronización 3D en mapa</label>
+              <label><input type="checkbox" id="plPalpack" checked /> Cartas de fichaje PalPack y requisitos sin bucles</label>
+              <label><input type="checkbox" id="plKeepGk" checked /> Mantener rol de portero en dorsal titular #1</label>
+              <label><input type="checkbox" id="plPositions" checked /> Posiciones de campo</label>
+              <label><input type="checkbox" id="plElements" checked /> Afinidades elementales</label>
+              <label><input type="checkbox" id="plStats" checked /> Estadísticas base y crecimiento</label>
+              <label><input type="checkbox" id="plAvatars" checked /> Espíritus Guerreros compatibles</label>
+              <label><input type="checkbox" id="plVisualSwap" /> Intercambio atómico de apariencia en personajes fijos (retrato + 3D + piel)</label>
+              <div class="slider-row">
+                <span>Varianza de stats: <strong id="lblStatVar">25%</strong></span>
+                <input type="range" id="plStatVar" min="5" max="50" value="25" />
+                <span>Prob. Espíritu Guerrero: <strong id="lblAvChance">25%</strong></span>
+                <input type="range" id="plAvChance" min="0" max="100" value="25" />
+              </div>
+            </div>
+          </div>
+
+          <!-- B. Skills -->
+          <div class="subsystem-box">
+            <label class="subsystem-title">
+              <input type="checkbox" id="skillsEnabled" checked />
+              <span>🔥 B. Supertécnicas y Talentos</span>
+            </label>
+            <div class="subsystem-options" id="skillsGroup">
+              <label><input type="checkbox" id="skInitial" checked /> Supertécnicas iniciales</label>
+              <label><input type="checkbox" id="skLearnset" checked /> Supertécnicas aprendidas por nivel</label>
+              <label><input type="checkbox" id="skTalents" checked /> Talentos pasivos</label>
+              <label><input type="checkbox" id="skAvatar" checked /> Habilidades de Espíritus Guerreros (<code>wk*</code>)</label>
+              <label><input type="checkbox" id="skCompat" checked /> Compatibilidad con posición del jugador</label>
+              <label><input type="checkbox" id="skUsableTp" checked /> Garantizar PT suficientes para usar técnicas iniciales (Nv.1)</label>
+              <label><input type="checkbox" id="skParams" /> Variar coste de PT, potencia y elemento de supertécnicas</label>
+            </div>
+          </div>
+
+          <!-- C. Teams -->
+          <div class="subsystem-box">
+            <label class="subsystem-title">
+              <input type="checkbox" id="teamsEnabled" checked />
+              <span>🛡️ C. Equipos Rivales y Pachangas</span>
+            </label>
+            <div class="subsystem-options" id="teamsGroup">
+              <label><input type="checkbox" id="tmStory" checked /> Configuración de equipos rivales y cadenas</label>
+              <label><input type="checkbox" id="tmPachanga" checked /> Configuración de equipos de pachanga</label>
+              <label><input type="checkbox" id="tmNumbers" checked /> Dorsales aleatorios únicos (1..99)</label>
+              <label><input type="checkbox" id="tmFormations" checked /> Formaciones de partido y pachanga</label>
+              <label><input type="checkbox" id="tmCoaches" checked /> Entrenadores</label>
+              <label><input type="checkbox" id="tmTactics" checked /> Supertácticas</label>
+              <label><input type="checkbox" id="tmEquip" checked /> Botas, guantes, pulseras y colgantes</label>
+              <label><input type="checkbox" id="tmLevels" /> Variar niveles de equipos rivales (±4 niveles)</label>
+            </div>
+          </div>
+
+          <!-- D & E. Rewards & Uniforms -->
+          <div class="two-col">
+            <div class="subsystem-box">
+              <label class="subsystem-title">
+                <input type="checkbox" id="rewardsEnabled" checked />
+                <span>🎁 D. Cofres y Recompensas</span>
+              </label>
+              <div class="subsystem-options">
+                <label><input type="checkbox" id="rwMapChests" checked /> Cofres del mundo (Luz y Sombra)</label>
+                <label><input type="checkbox" id="rwRouteChests" checked /> Cofres de cadenas de partidos</label>
+                <label><input type="checkbox" id="rwMatchDrops" checked /> Drops de partidos</label>
+                <label><input type="checkbox" id="rwPachangaDrops" checked /> Drops de pachangas</label>
+                <label><input type="checkbox" id="rwShops" /> Inventarios de tiendas secundarias</label>
+              </div>
+            </div>
+
+            <div class="subsystem-box">
+              <label class="subsystem-title">
+                <input type="checkbox" id="uniformsEnabled" checked />
+                <span>👕 E. Equipaciones y Seguridad</span>
+              </label>
+              <div class="subsystem-options">
+                <label><input type="checkbox" id="unRivals" checked /> Equipaciones de rivales</label>
+                <label><input type="checkbox" id="unPachangas" checked /> Equipaciones de pachangas</label>
+                <label><input type="checkbox" id="unObtainable" checked /> Equipaciones en recompensas</label>
+                <hr class="sep" />
+                <label><input type="checkbox" id="prStory" checked /> Protección anti-softlock de historia</label>
+                <label><input type="checkbox" id="prNutb" checked /> Auditar scripts <code>.nutb</code></label>
+                <label><input type="checkbox" id="prKeyItems" checked /> Proteger Objetos Clave y tickets</label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Generate CTA + Progress + Validation Viewer -->
+          <div class="generate-box">
+            <button type="button" class="btn btn-primary btn-large" id="btnGenerate">
+              ⚡ Generar Run Randomizada
+            </button>
+
+            <div id="progressArea" class="progress-area hidden">
+              <div class="progress-bar-track">
+                <div id="progressBarFill" class="progress-bar-fill" style="width: 0%"></div>
+              </div>
+              <div id="progressLabel" class="progress-label">Iniciando...</div>
+            </div>
+
+            <div id="resultBox" class="result-box hidden"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Built-in Cross-Platform File & Folder Browser Modal -->
+  <div id="browserModal" class="modal-backdrop hidden">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 id="modalTitle">Seleccionar archivo o carpeta</h3>
+        <button type="button" class="btn btn-ghost" id="btnCloseModal">✕</button>
+      </div>
+      <div class="modal-toolbar">
+        <button type="button" class="btn btn-secondary" id="btnModalUp">⬆ Subir carpeta</button>
+        <input type="text" id="modalCurrentPath" />
+        <button type="button" class="btn btn-secondary" id="btnModalGo">Ir</button>
+      </div>
+      <div id="modalDrives" class="drives-bar"></div>
+      <div id="modalEntries" class="entries-list"></div>
+      <div class="modal-footer">
+        <input type="text" id="modalNewSubfolder" placeholder="Opcional: subcarpeta nueva (ej. Run_Luz_01)" />
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="btnModalCancel">Cancelar</button>
+          <button type="button" class="btn btn-primary" id="btnModalSelectCurrent">Seleccionar esta carpeta</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

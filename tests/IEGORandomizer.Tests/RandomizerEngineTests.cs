@@ -317,5 +317,37 @@ namespace IEGORandomizer.Tests
                 try { Directory.Delete(tempDir, recursive: true); } catch { }
             }
         }
+
+        [Fact]
+        public void CliRunner_EndToEndExecution_GeneratesVerifiedCitraAndLayeredFsPackages()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "iego_test_cli_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                string sourceIea = Path.Combine(tempDir, "ie_a.fa");
+                string outputDir = Path.Combine(tempDir, "cli_out");
+                SyntheticGameArchiveBuilder.CreateRealisticIeAFa(sourceIea);
+
+                int exitCode = IEGORandomizer.App.CliRunner.Run(new[]
+                {
+                    "--cli",
+                    "--input", sourceIea,
+                    "--output", outputDir,
+                    "--seed", "CLI-SOMBRA-2026",
+                    "--edition", "sombra"
+                });
+
+                Assert.Equal(0, exitCode, "CLI runner should exit with code 0.");
+                Assert.True(File.Exists(Path.Combine(outputDir, "Citra", "load", "mods", "0004000000113000", "romfs", "ie_a.fa")));
+                Assert.True(File.Exists(Path.Combine(outputDir, "Luma3DS", "luma", "titles", "0004000000113000", "romfs", "ie_a.fa")));
+                Assert.True(File.Exists(Path.Combine(outputDir, "run_manifest.json")));
+                Assert.False(File.Exists(Path.Combine(outputDir, "spoiler_log.txt")), "CLI defaults to Blind-Play mode.");
+            }
+            finally
+            {
+                try { Directory.Delete(tempDir, recursive: true); } catch { }
+            }
+        }
     }
 }

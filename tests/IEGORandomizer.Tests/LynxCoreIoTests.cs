@@ -137,5 +137,36 @@ namespace IEGORandomizer.Tests
                 try { Directory.Delete(tempDir, recursive: true); } catch { }
             }
         }
+
+        [Fact]
+        public void VisualCoherenceAndIntegrityValidators_RejectOutOfRangeModelNumber2048()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "iego_test_bounds_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                string sourcePath = Path.Combine(tempDir, "ie_a.fa");
+                SyntheticGameArchiveBuilder.CreateRealisticIeAFa(sourcePath);
+
+                using var game = new SafeGOGame(sourcePath);
+                var bases = game.GetCharabase();
+                // Mutate one entry in memory to hit the exact 2048 engine crash boundary
+                bases[bases.Length - 1].ModelNumber = 2048;
+                game.SaveCharaBase(bases);
+
+                var visual = IEGORandomizer.Engine.Validation.VisualCoherenceValidator.AnalyzeArchive(game);
+                Assert.False(visual.CoherentPlayableBaseHashes.Contains(bases[bases.Length - 1].BaseHash),
+                    "ModelNumber >= 2048 must be excluded from coherent playable pool.");
+
+                var protection = new IEGORandomizer.Engine.Protection.StoryProtectionService()
+                    .BuildContext(game, GameEdition.Light, null);
+                var integrity = IEGORandomizer.Engine.Validation.ArchiveIntegrityValidator.Validate(game, protection, null);
+                Assert.False(integrity.IsValid, "ArchiveIntegrityValidator must flag ModelNumber == 2048.");
+            }
+            finally
+            {
+                try { Directory.Delete(tempDir, recursive: true); } catch { }
+            }
+        }
     }
 }
