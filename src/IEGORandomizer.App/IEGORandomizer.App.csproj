@@ -2,22 +2,37 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>IEGORandomizer.App</RootNamespace>
-    <AssemblyName>IEGORandomizer.App</AssemblyName>
+    <AssemblyName>IEGORandomizer</AssemblyName>
+    <Version>1.0.0</Version>
+    <Product>IEGO Randomizer — Inazuma Eleven GO: Luz y Sombra</Product>
+    <FileDescription>IEGO Randomizer para Inazuma Eleven GO: Luz y Sombra</FileDescription>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <Deterministic>true</Deterministic>
-    <NoWarn>$(NoWarn);MSB3277;NU1701</NoWarn>
+    <NoWarn>$(NoWarn);MSB3277;NU1701;IL3000</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="StudioElevenLib">
+      <HintPath>..\..\Libs\StudioElevenLib.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Lynx.Core\Lynx.Core.csproj" />
     <ProjectReference Include="..\IEGORandomizer.Engine\IEGORandomizer.Engine.csproj" />
   </ItemGroup>
 
+  <!-- Embed web UI assets directly inside IEGORandomizer.exe so single-file Windows builds require zero external folders -->
   <ItemGroup>
+    <EmbeddedResource Include="wwwroot\index.html" LogicalName="IEGORandomizer.App.wwwroot.index.html" />
+    <EmbeddedResource Include="wwwroot\styles.css" LogicalName="IEGORandomizer.App.wwwroot.styles.css" />
+    <EmbeddedResource Include="wwwroot\app.js" LogicalName="IEGORandomizer.App.wwwroot.app.js" />
     <Content Update="wwwroot\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
   </ItemGroup>
 </Project>

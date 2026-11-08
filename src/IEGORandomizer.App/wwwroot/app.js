@@ -41,6 +41,16 @@
     }
   });
 
+  $("btnShutdownApp").addEventListener("click", async () => {
+    try {
+      await fetch("api/app/shutdown", { method: "POST" });
+      document.body.innerHTML = "<div style='display:grid;place-items:center;height:100vh;color:#e8eefc;font-family:sans-serif;'><h2>Programa cerrado correctamente. Ya puedes cerrar esta pestaña/ventana.</h2></div>";
+      window.close();
+    } catch {
+      window.close();
+    }
+  });
+
   // Quick presets
   document.querySelectorAll("[data-preset]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -370,9 +380,13 @@
           .map((p) => `<li><code>${escapeHtml(p)}</code></li>`)
           .join("");
 
+        const currentOutDir = $("outputDir").value.trim();
         resultBox.className = "result-box success";
         resultBox.innerHTML = `
-          <div><strong>✅ ¡Run generada y verificada correctamente!</strong> ${rep.blindPlayMode ? "<span>(Modo a Ciegas activo: 0 spoilers mostrados)</span>" : ""}</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+            <div><strong>✅ ¡Partida generada y verificada correctamente!</strong> ${rep.blindPlayMode ? "<span>(Modo a Ciegas activo: 0 spoilers mostrados)</span>" : ""}</div>
+            <button type="button" class="btn btn-secondary" id="btnOpenGeneratedFolder">📂 Abrir carpeta de salida</button>
+          </div>
           <div class="result-grid">
             <div class="metric-pill"><strong>Seed:</strong> <code>${escapeHtml(rep.seed)}</code></div>
             <div class="metric-pill"><strong>Huella:</strong> <code>${escapeHtml(rep.seedFingerprint)}</code></div>
@@ -387,6 +401,17 @@
           </details>
         `;
         resultBox.classList.remove("hidden");
+
+        const openBtn = $("btnOpenGeneratedFolder");
+        if (openBtn) {
+          openBtn.addEventListener("click", async () => {
+            await fetch("api/app/open-folder", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ folderPath: currentOutDir })
+            });
+          });
+        }
         return;
       }
     }

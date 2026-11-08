@@ -110,7 +110,8 @@ namespace IEGORandomizer.App.Services
         }
 
         /// <summary>
-        /// Opens a native Windows File/Folder dialog when running on a Windows PC.
+        /// Opens a native Windows File/Folder dialog when running on a Windows PC,
+        /// using a TopMost owner window so the dialog always appears in front of the app window.
         /// Returns null on non-Windows platforms so the frontend seamlessly opens the built-in browser modal.
         /// </summary>
         public static string TryPickNativeWindowsDialog(string mode)
@@ -121,13 +122,13 @@ namespace IEGORandomizer.App.Services
             try
             {
                 string script = mode == "folder"
-                    ? "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.ShowNewFolderButton = $true; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.SelectedPath }"
-                    : "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'Inazuma Eleven GO (*.fa;*.3ds;*.cxi;*.romfs)|*.fa;*.3ds;*.cci;*.cxi;*.romfs|Todos los archivos (*.*)|*.*'; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.FileName }";
+                    ? "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Selecciona la carpeta (RomFS o carpeta de salida)'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog($owner) -eq 'OK') { Write-Output $f.SelectedPath }; $owner.Dispose()"
+                    : "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Title = 'Selecciona ie_a.fa o ROM .3ds desencriptada'; $f.Filter = 'Inazuma Eleven GO (*.fa;*.3ds;*.cxi;*.romfs)|*.fa;*.3ds;*.cci;*.cxi;*.romfs|Todos los archivos (*.*)|*.*'; if ($f.ShowDialog($owner) -eq 'OK') { Write-Output $f.FileName }; $owner.Dispose()";
 
                 using var proc = Process.Start(new ProcessStartInfo
                 {
                     FileName = "powershell",
-                    Arguments = $"-NoProfile -STA -Command \"{script}\"",
+                    Arguments = $"-NoProfile -STA -WindowStyle Hidden -Command \"{script}\"",
                     CreateNoWindow = true,
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
@@ -138,7 +139,7 @@ namespace IEGORandomizer.App.Services
                     return null;
 
                 string output = proc.StandardOutput.ReadToEnd().Trim();
-                proc.WaitForExit(120_000);
+                proc.WaitForExit(180_000);
                 return string.IsNullOrWhiteSpace(output) ? null : output;
             }
             catch
@@ -153,25 +154,30 @@ namespace IEGORandomizer.App.Services
             {
                 if (OperatingSystem.IsWindows())
                 {
-                    // Prefer Edge --app mode on Windows 10/11 for a clean native desktop app window
-                    try
+                    // Prefer Edge --app mode on Windows 10/11 for a clean standalone desktop window
+                    foreach (string browserExe in new[] { "msedge", "chrome" })
                     {
-                        Process.Start(new ProcessStartInfo
+                        try
                         {
-                            FileName = "msedge",
-                            Arguments = $"--app={localUrl} --window-size=1220,860",
-                            UseShellExecute = true
-                        });
-                        return;
+                            Process.Start(new ProcessStartInfo
+                            {
+                                FileName = browserExe,
+                                Arguments = $"--app={localUrl} --window-size=1260,880",
+                                UseShellExecute = true
+                            });
+                            return;
+                        }
+                        catch
+                        {
+                            // Try next candidate
+                        }
                     }
-                    catch
+
+                    Process.Start(new ProcessStartInfo
                     {
-                        Process.Start(new ProcessStartInfo
-                        {
-                            FileName = localUrl,
-                            UseShellExecute = true
-                        });
-                    }
+                        FileName = localUrl,
+                        UseShellExecute = true
+                    });
                 }
             }
             catch

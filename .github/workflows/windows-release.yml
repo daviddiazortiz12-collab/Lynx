@@ -1,0 +1,171 @@
+name: Build & Verify Windows Self-Contained Release
+
+on:
+  push:
+    branches:
+      - arena/799dcf14-lynx
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'IEGORandomizer.sln'
+      - '.github/workflows/windows-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-x64:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout branch arena/799dcf14-lynx
+        uses: actions/checkout@v4
+        with:
+          ref: arena/799dcf14-lynx
+          fetch-depth: 0
+
+      - name: Setup .NET 10.0 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Enable Official Microsoft NuGet Feed for Windows Runtime Packs
+        shell: pwsh
+        run: |
+          dotnet nuget add source https://api.nuget.org/v3/index.json --name nuget.org --configfile NuGet.Config
+
+      - name: Run Automated Integrity & Engine Tests on Windows x64
+        shell: pwsh
+        run: |
+          dotnet run --project tests/IEGORandomizer.Tests/IEGORandomizer.Tests.csproj --configuration Release
+
+      - name: Publish Standalone Self-Contained Windows x64 Executable (.exe)
+        shell: pwsh
+        run: |
+          $outDir = "publish_win64/IEGORandomizer-Windows-x64"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+          dotnet publish src/IEGORandomizer.App/IEGORandomizer.App.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:IncludeAllContentForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true `
+            -p:DebugType=none `
+            -p:DebugSymbols=false `
+            --output $outDir
+
+          # Remove any redundant static web assets subfolder since assets are embedded inside IEGORandomizer.exe
+          if (Test-Path "$outDir/wwwroot") {
+            Remove-Item -Recurse -Force "$outDir/wwwroot"
+          }
+          Get-ChildItem -Path $outDir -Filter "*.pdb" | Remove-Item -Force -ErrorAction SilentlyContinue
+
+          Copy-Item "src/IEGORandomizer.App/Packaging/LEEME_INSTRUCCIONES_FACILES.txt" "$outDir/LEEME_INSTRUCCIONES_FACILES.txt"
+
+          Write-Host "Published directory contents:"
+          Get-ChildItem -Path $outDir | Format-Table Name, Length -AutoSize
+
+      - name: Verify Isolated Single-File .exe Startup & HTTP Endpoints on Windows
+        shell: pwsh
+        run: |
+          $isoDir = Join-Path $env:RUNNER_TEMP "isolated_exe_verify"
+          New-Item -ItemType Directory -Force -Path $isoDir | Out-Null
+          Copy-Item "publish_win64/IEGORandomizer-Windows-x64/IEGORandomizer.exe" "$isoDir/IEGORandomizer.exe"
+
+          # 1. Verify CLI help boots cleanly without external DLLs or .NET lookup
+          $env:DOTNET_MULTILEVEL_LOOKUP = "0"
+          & "$isoDir/IEGORandomizer.exe" --help
+          if ($LASTEXITCODE -ne 0) {
+            throw "IEGORandomizer.exe --help failed with exit code $LASTEXITCODE"
+          }
+
+          # 2. Verify Desktop GUI HTTP host boots cleanly from isolated single-file .exe
+          $proc = Start-Process -FilePath "$isoDir/IEGORandomizer.exe" `
+            -ArgumentList "--no-browser","--port","5189" `
+            -WorkingDirectory $isoDir `
+            -PassThru
+
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Milliseconds 500
+              try {
+                $health = Invoke-RestMethod -Uri "http://127.0.0.1:5189/api/health" -TimeoutSec 2
+                if ($health.status -eq "ok") {
+                  $ready = $true
+                  break
+                }
+              } catch { }
+            }
+
+            if (-not $ready) {
+              throw "IEGORandomizer.exe failed to respond on http://127.0.0.1:5189/api/health"
+            }
+
+            $indexResp = Invoke-WebRequest -Uri "http://127.0.0.1:5189/" -UseBasicParsing
+            if ($indexResp.StatusCode -ne 200 -or $indexResp.Content -notmatch "IEGO Randomizer") {
+              throw "Embedded index.html check failed."
+            }
+
+            $jsResp = Invoke-WebRequest -Uri "http://127.0.0.1:5189/app.js" -UseBasicParsing
+            if ($jsResp.StatusCode -ne 200) {
+              throw "Embedded app.js check failed."
+            }
+
+            $seedResp = Invoke-RestMethod -Uri "http://127.0.0.1:5189/api/seed/random"
+            Write-Host "Verified live seed endpoint from standalone Windows .exe: $($seedResp.seed)"
+
+            Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:5189/api/app/shutdown" | Out-Null
+            Start-Sleep -Seconds 1
+          } finally {
+            if (-not $proc.HasExited) {
+              Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
+
+      - name: Create Release ZIP, Publish GitHub Release & Sync Artifact to Branch
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          New-Item -ItemType Directory -Force -Path "release" | Out-Null
+          $zipPath = "release/IEGORandomizer-Windows-x64.zip"
+          if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+
+          Compress-Archive -Path "publish_win64/IEGORandomizer-Windows-x64/*" -DestinationPath $zipPath -CompressionLevel Optimal
+
+          $exeHash = (Get-FileHash "publish_win64/IEGORandomizer-Windows-x64/IEGORandomizer.exe" -Algorithm SHA256).Hash
+          $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
+          $zipSizeMb = [math]::Round((Get-Item $zipPath).Length / 1MB, 2)
+
+          @(
+            "$zipHash  IEGORandomizer-Windows-x64.zip ($zipSizeMb MB)"
+            "$exeHash  IEGORandomizer.exe"
+          ) | Set-Content -Path "release/SHA256SUMS.txt" -Encoding UTF8
+
+          Write-Host "Packaged $zipPath ($zipSizeMb MB) - SHA256: $zipHash"
+
+          # Create or update GitHub Release v1.0.0 targeting arena/799dcf14-lynx
+          $tagName = "v1.0.0-win64"
+          $existing = gh release view $tagName 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tagName $zipPath "release/SHA256SUMS.txt" --clobber
+          } else {
+            gh release create $tagName $zipPath "release/SHA256SUMS.txt" `
+              --target arena/799dcf14-lynx `
+              --title "IEGO Randomizer v1.0.0 (Windows x64 — Ejecutable Independiente)" `
+              --notes "Versión ejecutable independiente (self-contained) para Windows 10/11 (64 bits). Descarga **IEGORandomizer-Windows-x64.zip**, extráelo en cualquier carpeta y haz doble clic en **IEGORandomizer.exe** (no requiere instalar .NET)."
+          }
+
+          # Restore NuGet.Config before committing release artifacts
+          git checkout -- NuGet.Config
+
+          # Commit the ready-to-download ZIP (< 50 MB) to release/ on arena/799dcf14-lynx with [skip ci]
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f release/IEGORandomizer-Windows-x64.zip release/SHA256SUMS.txt
+          git commit -m "chore(release): add verified Windows x64 self-contained executable package [skip ci]"
+          git push origin HEAD:arena/799dcf14-lynx

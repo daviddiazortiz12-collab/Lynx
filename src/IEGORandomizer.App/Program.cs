@@ -1,8 +1,13 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Tasks;
 using IEGORandomizer.App;
 using IEGORandomizer.App.Services;
 using IEGORandomizer.Engine.Seeding;
@@ -12,6 +17,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 // Run CLI mode when --cli or -i/--input is passed on the command line
 if (args.Any(a => a.Equals("--cli", StringComparison.OrdinalIgnoreCase) ||
@@ -23,14 +29,18 @@ if (args.Any(a => a.Equals("--cli", StringComparison.OrdinalIgnoreCase) ||
     return CliRunner.Run(args);
 }
 
-int port = 5178;
+int? explicitPort = null;
 for (int i = 0; i < args.Length - 1; i++)
 {
     if (args[i].Equals("--port", StringComparison.OrdinalIgnoreCase) && int.TryParse(args[i + 1], out int parsedPort))
     {
-        port = parsedPort;
+        explicitPort = parsedPort;
     }
 }
+
+bool bindAny = args.Any(a => a.Equals("--bind-any", StringComparison.OrdinalIgnoreCase)) || !OperatingSystem.IsWindows();
+int port = explicitPort ?? FindAvailablePort(5178);
+string bindHost = bindAny ? "0.0.0.0" : "127.0.0.1";
 
 string resolvedWwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
 if (!Directory.Exists(resolvedWwwroot))
@@ -46,10 +56,17 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {
     Args = args,
     ContentRootPath = AppContext.BaseDirectory,
-    WebRootPath = resolvedWwwroot
+    WebRootPath = Directory.Exists(resolvedWwwroot) ? resolvedWwwroot : null
 });
 
-builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
+// Keep console clean and non-intimidating for end users on Windows
+builder.Logging.ClearProviders();
+if (!OperatingSystem.IsWindows())
+{
+    builder.Logging.AddSimpleConsole();
+}
+
+builder.WebHost.UseUrls($"http://{bindHost}:{port}");
 
 builder.Services.ConfigureHttpJsonOptions(opts =>
 {
@@ -61,12 +78,22 @@ builder.Services.AddSingleton<JobManager>();
 
 var app = builder.Build();
 
-app.UseDefaultFiles();
-app.UseStaticFiles();
+if (Directory.Exists(resolvedWwwroot))
+{
+    app.UseDefaultFiles();
+    app.UseStaticFiles();
+}
+
+// Embedded-resource fallback so single-file IEGORandomizer.exe works anywhere with zero external folders
+app.MapGet("/", () => ServeEmbeddedOrPhysicalAsset(resolvedWwwroot, "index.html", "text/html; charset=utf-8"));
+app.MapGet("/index.html", () => ServeEmbeddedOrPhysicalAsset(resolvedWwwroot, "index.html", "text/html; charset=utf-8"));
+app.MapGet("/styles.css", () => ServeEmbeddedOrPhysicalAsset(resolvedWwwroot, "styles.css", "text/css; charset=utf-8"));
+app.MapGet("/app.js", () => ServeEmbeddedOrPhysicalAsset(resolvedWwwroot, "app.js", "application/javascript; charset=utf-8"));
 
 app.MapGet("/api/health", () => Results.Ok(new
 {
     status = "ok",
+    version = "1.0.0",
     app = "IEGO Randomizer (Inazuma Eleven GO: Luz y Sombra)",
     platform = Environment.OSVersion.Platform.ToString()
 }));
@@ -90,6 +117,46 @@ app.MapPost("/api/fs/pick-native", (string mode) =>
         supported = OperatingSystem.IsWindows(),
         selectedPath = picked
     });
+});
+
+app.MapPost("/api/app/open-folder", async (HttpContext ctx) =>
+{
+    var body = await ctx.Request.ReadFromJsonAsync<OpenFolderRequest>();
+    string folder = body?.FolderPath?.Trim() ?? string.Empty;
+    if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+    {
+        return Results.BadRequest(new { error = "La carpeta indicada no existe." });
+    }
+
+    if (OperatingSystem.IsWindows())
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"\"{Path.GetFullPath(folder)}\"",
+                UseShellExecute = true
+            });
+            return Results.Ok(new { opened = true });
+        }
+        catch (Exception ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    return Results.Ok(new { opened = false });
+});
+
+app.MapPost("/api/app/shutdown", (IHostApplicationLifetime lifetime) =>
+{
+    _ = Task.Run(async () =>
+    {
+        await Task.Delay(250);
+        lifetime.StopApplication();
+    });
+    return Results.Ok(new { stopping = true });
 });
 
 app.MapPost("/api/inspect", async (HttpContext ctx) =>
@@ -191,7 +258,14 @@ app.MapGet("/api/jobs/{jobId}", (string jobId, JobManager jobs) =>
 app.Lifetime.ApplicationStarted.Register(() =>
 {
     string localUrl = $"http://127.0.0.1:{port}";
-    Console.WriteLine($"IEGO Randomizer UI escuchando en {localUrl} (0.0.0.0:{port})");
+    Console.WriteLine("================================================================");
+    Console.WriteLine("  IEGO RANDOMIZER v1.0 — Inazuma Eleven GO: Luz y Sombra");
+    Console.WriteLine("================================================================");
+    Console.WriteLine($"  Interfaz activa en : {localUrl}");
+    Console.WriteLine("  Estado             : Listo (Mantén esta ventana abierta mientras usas el programa)");
+    Console.WriteLine("  Para salir         : Pulsa 'Cerrar programa' en la interfaz o cierra esta ventana.");
+    Console.WriteLine("================================================================");
+
     if (!args.Any(a => a.Equals("--no-browser", StringComparison.OrdinalIgnoreCase)))
     {
         DesktopDialogHelper.TryOpenDesktopAppWindow(localUrl);
@@ -201,7 +275,54 @@ app.Lifetime.ApplicationStarted.Register(() =>
 app.Run();
 return 0;
 
+static int FindAvailablePort(int preferredPort)
+{
+    try
+    {
+        using var check = new TcpListener(IPAddress.Loopback, preferredPort);
+        check.Start();
+        check.Stop();
+        return preferredPort;
+    }
+    catch
+    {
+        using var fallback = new TcpListener(IPAddress.Loopback, 0);
+        fallback.Start();
+        int assigned = ((IPEndPoint)fallback.LocalEndpoint).Port;
+        fallback.Stop();
+        return assigned;
+    }
+}
+
+static IResult ServeEmbeddedOrPhysicalAsset(string wwwrootDir, string fileName, string contentType)
+{
+    if (!string.IsNullOrEmpty(wwwrootDir))
+    {
+        string diskFile = Path.Combine(wwwrootDir, fileName);
+        if (File.Exists(diskFile))
+        {
+            return Results.Bytes(File.ReadAllBytes(diskFile), contentType);
+        }
+    }
+
+    string resourceName = $"IEGORandomizer.App.wwwroot.{fileName}";
+    using Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName);
+    if (stream == null)
+    {
+        return Results.NotFound();
+    }
+
+    using var ms = new MemoryStream();
+    stream.CopyTo(ms);
+    return Results.Bytes(ms.ToArray(), contentType);
+}
+
 internal sealed class InspectPathRequest
 {
     public string InputPath { get; set; }
+}
+
+internal sealed class OpenFolderRequest
+{
+    public string FolderPath { get; set; }
 }
