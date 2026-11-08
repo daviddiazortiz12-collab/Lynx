@@ -217,37 +217,37 @@ namespace IEGORandomizer.Tests
             game.SaveTrainingUD(new ITrainingUD[] { new TrainingUD() });
             game.SaveSkillTable(skillTables.ToArray());
 
-            // 2. Skills & Avatars
+            // 2. Skills & Avatars (MovePositions.json: 1=Save, 2=Shot, 3=Dribble, 4=Block, 5=Skill/Talent)
             var skills = new List<ISkillConfig>
             {
-                MakeSkill("whs0001", skillPos: 1, elem: 3, tp: 30, power: 90),  // Shoot
-                MakeSkill("whs0002", skillPos: 1, elem: 1, tp: 45, power: 130), // Shoot
-                MakeSkill("whs0003", skillPos: 1, elem: 2, tp: 55, power: 160), // Shoot
-                MakeSkill("whs0004", skillPos: 1, elem: 4, tp: 25, power: 75),  // Shoot (low TP)
-                MakeSkill("who0001", skillPos: 2, elem: 1, tp: 24, power: 80),  // Dribble
-                MakeSkill("who0002", skillPos: 2, elem: 2, tp: 38, power: 120), // Dribble
-                MakeSkill("who0003", skillPos: 2, elem: 4, tp: 48, power: 150), // Dribble
-                MakeSkill("whd0001", skillPos: 3, elem: 4, tp: 25, power: 85),  // Block
-                MakeSkill("whd0002", skillPos: 3, elem: 2, tp: 40, power: 125), // Block
-                MakeSkill("whd0003", skillPos: 3, elem: 3, tp: 50, power: 155), // Block
-                MakeSkill("whk0001", skillPos: 4, elem: 4, tp: 26, power: 90),  // Catch
-                MakeSkill("whk0002", skillPos: 4, elem: 1, tp: 42, power: 135), // Catch
-                MakeSkill("whk0003", skillPos: 4, elem: 3, tp: 54, power: 170), // Catch
+                MakeSkill("whs0001", skillPos: 2, elem: 3, tp: 30, power: 90),  // Shot
+                MakeSkill("whs0002", skillPos: 2, elem: 1, tp: 45, power: 130), // Shot
+                MakeSkill("whs0003", skillPos: 2, elem: 2, tp: 55, power: 160), // Shot
+                MakeSkill("whs0004", skillPos: 2, elem: 4, tp: 25, power: 75),  // Shot (low TP)
+                MakeSkill("who0001", skillPos: 3, elem: 1, tp: 24, power: 80),  // Dribble
+                MakeSkill("who0002", skillPos: 3, elem: 2, tp: 38, power: 120), // Dribble
+                MakeSkill("who0003", skillPos: 3, elem: 4, tp: 48, power: 150), // Dribble
+                MakeSkill("whd0001", skillPos: 4, elem: 4, tp: 25, power: 85),  // Block
+                MakeSkill("whd0002", skillPos: 4, elem: 2, tp: 40, power: 125), // Block
+                MakeSkill("whd0003", skillPos: 4, elem: 3, tp: 50, power: 155), // Block
+                MakeSkill("whk0001", skillPos: 1, elem: 4, tp: 26, power: 90),  // Save
+                MakeSkill("whk0002", skillPos: 1, elem: 1, tp: 42, power: 135), // Save
+                MakeSkill("whk0003", skillPos: 1, elem: 3, tp: 54, power: 170), // Save
                 MakeSkill("whp0001", skillPos: 5, elem: 0, tp: 0,  power: 0),   // Talent
                 MakeSkill("whp0002", skillPos: 5, elem: 0, tp: 0,  power: 0),   // Talent
                 MakeSkill("whp0003", skillPos: 5, elem: 0, tp: 0,  power: 0),   // Talent
-                MakeSkill("wks0001", skillPos: 1, elem: 1, tp: 60, power: 180), // Avatar Shoot
-                MakeSkill("wko0001", skillPos: 2, elem: 2, tp: 50, power: 165), // Avatar Dribble
-                MakeSkill("wkd0001", skillPos: 3, elem: 4, tp: 55, power: 170), // Avatar Block
-                MakeSkill("wkk0001", skillPos: 4, elem: 3, tp: 60, power: 185)  // Avatar Catch
+                MakeSkill("wks0001", skillPos: 2, elem: 1, tp: 60, power: 180), // Avatar Shot
+                MakeSkill("wko0001", skillPos: 3, elem: 2, tp: 50, power: 165), // Avatar Dribble
+                MakeSkill("wkd0001", skillPos: 4, elem: 4, tp: 55, power: 170), // Avatar Block
+                MakeSkill("wkk0001", skillPos: 1, elem: 3, tp: 60, power: 185)  // Avatar Save
             };
             game.SaveSkillConfigs(skills.ToArray());
 
             var avatars = new List<IAvatar>
             {
-                MakeAvatar("ck0001", num: 1, pos: 2, elem: 1, skillCode: "wko0001"),
-                MakeAvatar("ck0002", num: 2, pos: 2, elem: 2, skillCode: "wks0001"),
-                MakeAvatar("ck0003", num: 3, pos: 3, elem: 3, skillCode: "wks0001"),
+                MakeAvatar("ck0001", num: 1, pos: 3, elem: 1, skillCode: "wko0001"),
+                MakeAvatar("ck0002", num: 2, pos: 3, elem: 2, skillCode: "wks0001"),
+                MakeAvatar("ck0003", num: 3, pos: 2, elem: 3, skillCode: "wks0001"),
                 MakeAvatar("ck0004", num: 4, pos: 1, elem: 4, skillCode: "wkk0001")
             };
             foreach (string ck in new[] { "ck0001", "ck0002", "ck0003", "ck0004" })
@@ -255,24 +255,25 @@ namespace IEGORandomizer.Tests
                 Arc0SafeArchive.WriteFileAtPath(root, $"/data/bustup/avatar/{ck}a.xi", Encoding.ASCII.GetBytes("AV_" + ck));
             }
 
-            // 3. Build complete item_config.cfg.bin with all IEGO1 sections + ITEM_REF
+            // 3. Build complete item_config.cfg.bin with all IEGO1 sections + ITEM_REF (ItemTypes.json)
             var equipmentItems = new List<ItemConfig>
             {
                 new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iie0001"), ItemRef = 10, ItemCategory = 1 }, // Boots
                 new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iie0002"), ItemRef = 10, ItemCategory = 1 }, // Boots
-                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iie0003"), ItemRef = 10, ItemCategory = 4 }, // Gloves
-                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iie0004"), ItemRef = 10, ItemCategory = 3 }, // Pendant
-                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iie0005"), ItemRef = 10, ItemCategory = 2 }  // Bracelet
+                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iie0003"), ItemRef = 10, ItemCategory = 2 }, // Gloves
+                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iie0004"), ItemRef = 10, ItemCategory = 4 }, // Pendant
+                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iie0005"), ItemRef = 10, ItemCategory = 3 }  // Bracelet
             };
 
             var consumeItems = new List<ItemConfig>
             {
-                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iic0001"), ItemRef = 50, ItemCategory = 10 },
-                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iic0002"), ItemRef = 50, ItemCategory = 10 },
-                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iif0001"), ItemRef = 50, ItemCategory = 17 }, // Formation 1
-                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iif0002"), ItemRef = 50, ItemCategory = 17 }, // Formation 2
-                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iit0001"), ItemRef = 50, ItemCategory = 18 }, // Tactic 1
-                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iit0002"), ItemRef = 50, ItemCategory = 18 }  // Tactic 2
+                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iic0001"), ItemRef = 50, ItemCategory = 11 }, // Healing FP
+                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iic0002"), ItemRef = 50, ItemCategory = 12 }, // Healing TP
+                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iif0001"), ItemRef = 50, ItemCategory = 19 }, // Formation (Match)
+                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iif0002"), ItemRef = 50, ItemCategory = 19 }, // Formation (Match)
+                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iif0003"), ItemRef = 50, ItemCategory = 20 }, // Formation (Mini-Battle)
+                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iit0001"), ItemRef = 50, ItemCategory = 23 }, // Tactic 1
+                new ItemConfig { ItemID = Level5IdHelper.ComputeCrc32Utf8("iit0002"), ItemRef = 50, ItemCategory = 23 }  // Tactic 2
             };
 
             var importantItems = new List<ItemConfig>

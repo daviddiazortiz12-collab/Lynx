@@ -19,5 +19,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Lynx.Core\Lynx.Core.csproj" />
+    <ProjectReference Include="..\..\src\IEGORandomizer.Engine\IEGORandomizer.Engine.csproj" />
   </ItemGroup>
 </Project>
