@@ -56,6 +56,27 @@ namespace Lynx.Core.Games
             }
         }
 
+        public static int GetStoryKitNumber(IStoryTeamInfo team, int slot1Based) => slot1Based switch
+        {
+            1 => team.NumberPlayer1,
+            2 => team.NumberPlayer2,
+            3 => team.NumberPlayer3,
+            4 => team.NumberPlayer4,
+            5 => team.NumberPlayer5,
+            6 => team.NumberPlayer6,
+            7 => team.NumberPlayer7,
+            8 => team.NumberPlayer8,
+            9 => team.NumberPlayer9,
+            10 => team.NumberPlayer10,
+            11 => team.NumberPlayer11,
+            12 => team.NumberPlayer12,
+            13 => team.NumberPlayer13,
+            14 => team.NumberPlayer14,
+            15 => team.NumberPlayer15,
+            16 => team.NumberPlayer16,
+            _ => throw new ArgumentOutOfRangeException(nameof(slot1Based))
+        };
+
         public static void SetStoryKitNumber(IStoryTeamInfo team, int slot1Based, int kitNumber)
         {
             switch (slot1Based)
@@ -87,6 +108,16 @@ namespace Lynx.Core.Games
             3 => team.Player3,
             4 => team.Player4,
             5 => team.Player5,
+            _ => throw new ArgumentOutOfRangeException(nameof(slot1Based))
+        };
+
+        public static int GetEncountKitNumber(IEncountTeamInfo team, int slot1Based) => slot1Based switch
+        {
+            1 => team.NumberPlayer1,
+            2 => team.NumberPlayer2,
+            3 => team.NumberPlayer3,
+            4 => team.NumberPlayer4,
+            5 => team.NumberPlayer5,
             _ => throw new ArgumentOutOfRangeException(nameof(slot1Based))
         };
 

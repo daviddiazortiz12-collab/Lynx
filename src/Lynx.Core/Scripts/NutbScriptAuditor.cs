@@ -16,6 +16,9 @@ namespace Lynx.Core.Scripts
         public int ScannedScriptCount { get; set; }
         public HashSet<string> NativeCommands { get; } = new(StringComparer.Ordinal);
         public HashSet<string> ReferencedCharacterIds { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> ReferencedPartyParamIds { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> ReferencedBattleCharacterIds { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> ReferencedCutsceneModelIds { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> ReferencedSkillIds { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> ReferencedAvatarIds { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> ReferencedMatchIds { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -48,11 +51,11 @@ namespace Lynx.Core.Scripts
             if (archiveRoot == null)
                 return report;
 
-            WalkVirtualDirectory(archiveRoot, report);
+            WalkVirtualDirectory(archiveRoot, string.Empty, report);
             return report;
         }
 
-        public static void InspectNutbPayload(byte[] rawBytes, NutbAuditReport report)
+        public static void InspectNutbPayload(byte[] rawBytes, NutbAuditReport report, string virtualPath = null)
         {
             if (rawBytes == null || rawBytes.Length < 18 || report == null)
                 return;
@@ -72,6 +75,11 @@ namespace Lynx.Core.Scripts
             EncodingInitializer.EnsureRegistered();
             Encoding shiftJis = Encoding.GetEncoding("Shift-JIS");
 
+            bool isBattleScript = !string.IsNullOrEmpty(virtualPath) &&
+                (virtualPath.Contains("/battle/", StringComparison.OrdinalIgnoreCase) ||
+                 virtualPath.Contains("/btl", StringComparison.OrdinalIgnoreCase));
+            var localCharTokens = new List<string>();
+
             // Scan Squirrel 2.2.3 typed object records in constant pools:
             // OT_STRING (0x08000010): [uint32 tag][int32 len][byte[len] chars]
             // OT_INTEGER (0x05000002): [uint32 tag][int32 value]
@@ -86,7 +94,7 @@ namespace Lynx.Core.Scripts
                         if (LooksPrintableBytes(payload, i + 8, strLen))
                         {
                             string literal = shiftJis.GetString(payload, i + 8, strLen);
-                            ClassifyStringLiteral(literal, report);
+                            ClassifyStringLiteral(literal, report, ref isBattleScript, localCharTokens);
                             i += 7 + strLen;
                         }
                     }
@@ -101,25 +109,34 @@ namespace Lynx.Core.Scripts
                     i += 7;
                 }
             }
+
+            if (isBattleScript && localCharTokens.Count > 0)
+            {
+                foreach (string tok in localCharTokens)
+                {
+                    report.ReferencedBattleCharacterIds.Add(tok);
+                }
+            }
         }
 
-        private static void WalkVirtualDirectory(VirtualDirectory directory, NutbAuditReport report)
+        private static void WalkVirtualDirectory(VirtualDirectory directory, string currentPath, NutbAuditReport report)
         {
             foreach (var kvp in directory.Files)
             {
                 if (kvp.Key.EndsWith(".nutb", StringComparison.OrdinalIgnoreCase))
                 {
+                    string vPath = currentPath + "/" + kvp.Key;
                     kvp.Value.Read();
                     if (kvp.Value.ByteContent != null)
                     {
-                        InspectNutbPayload(kvp.Value.ByteContent, report);
+                        InspectNutbPayload(kvp.Value.ByteContent, report, vPath);
                     }
                 }
             }
 
             foreach (VirtualDirectory child in directory.Folders)
             {
-                WalkVirtualDirectory(child, report);
+                WalkVirtualDirectory(child, currentPath + "/" + child.Name, report);
             }
         }
 
@@ -157,7 +174,11 @@ namespace Lynx.Core.Scripts
             return true;
         }
 
-        private static void ClassifyStringLiteral(string literal, NutbAuditReport report)
+        private static void ClassifyStringLiteral(
+            string literal,
+            NutbAuditReport report,
+            ref bool isBattleScript,
+            List<string> localCharTokens)
         {
             if (string.IsNullOrWhiteSpace(literal))
                 return;
@@ -166,6 +187,11 @@ namespace Lynx.Core.Scripts
             if (trimmed.StartsWith("CMND_", StringComparison.Ordinal))
             {
                 report.NativeCommands.Add(trimmed);
+                if (trimmed.StartsWith("CMND_BTL_", StringComparison.Ordinal) ||
+                    trimmed.StartsWith("CMND_BTLEV_", StringComparison.Ordinal))
+                {
+                    isBattleScript = true;
+                }
                 return;
             }
 
@@ -173,9 +199,20 @@ namespace Lynx.Core.Scripts
                 return;
 
             string lower = trimmed.ToLowerInvariant();
-            if (lower.StartsWith("para_cp") || lower.StartsWith("cp") || lower.StartsWith("cn") || lower.StartsWith("ca"))
+            if (lower.StartsWith("para_cp"))
             {
                 report.ReferencedCharacterIds.Add(lower);
+                report.ReferencedPartyParamIds.Add(lower);
+                localCharTokens.Add(lower);
+            }
+            else if (lower.StartsWith("cp") || lower.StartsWith("cn") || lower.StartsWith("ca"))
+            {
+                report.ReferencedCharacterIds.Add(lower);
+                report.ReferencedCutsceneModelIds.Add(lower);
+                if (lower.StartsWith("cp"))
+                {
+                    localCharTokens.Add(lower);
+                }
             }
             else if (lower.StartsWith("wh") || lower.StartsWith("wk"))
             {

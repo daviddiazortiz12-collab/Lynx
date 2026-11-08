@@ -109,18 +109,15 @@ namespace IEGORandomizer.Engine.Modules
                         encountTeamMap[team.TeamConfigID] = updatedBases;
                     }
 
-                    // Synchronize overworld 3D pachanga NPCs with the randomized 5v5 pachanga roster
+                    // Synchronize overworld 3D pachanga NPCs with the randomized 5v5 pachanga roster.
+                    // Never overwrite ChasePlayer (2 = chases Arion on map, other = stationary)!
                     if (mapSpawns.Count > 0)
                     {
                         foreach (var spawn in mapSpawns)
                         {
                             if (encountTeamMap.TryGetValue(spawn.Record.TeamID, out int[] baseHashes))
                             {
-                                if (baseHashes[0] != 0)
-                                {
-                                    spawn.Record.ChasePlayer = baseHashes[0];
-                                    spawn.Record.PlayerID1 = baseHashes[0];
-                                }
+                                if (baseHashes[0] != 0) spawn.Record.PlayerID1 = baseHashes[0];
                                 if (baseHashes[1] != 0) spawn.Record.PlayerID2 = baseHashes[1];
                                 if (baseHashes[2] != 0) spawn.Record.PlayerID3 = baseHashes[2];
                                 if (baseHashes[3] != 0) spawn.Record.PlayerID4 = baseHashes[3];
@@ -426,15 +423,18 @@ namespace IEGORandomizer.Engine.Modules
                 string pRpg = $"/data/chr/model/rpg/face/{cpCode}m.xc";
                 string pWaza = $"/data/chr/model/waza/face/{cpCode}a.xc";
 
-                if (!root.IsFullPathExists(pBust) || !root.IsFullPathExists(pRpg) || !root.IsFullPathExists(pWaza))
+                byte[] bustBytes = Arc0SafeArchive.TryReadFileFromPath(root, pBust);
+                byte[] rpgBytes = Arc0SafeArchive.TryReadFileFromPath(root, pRpg);
+                byte[] wazaBytes = Arc0SafeArchive.TryReadFileFromPath(root, pWaza);
+                if (bustBytes == null || rpgBytes == null || wazaBytes == null)
                     continue;
 
                 validSwapTargets.Add(cb);
                 snapshots.Add((
                     cb.NameHash, cb.NicknameHash, cb.DescriptionHash, cb.Body, cb.Gender, cb.Skin, cb.Year,
-                    root.GetFileFromFullPath(pBust),
-                    root.GetFileFromFullPath(pRpg),
-                    root.GetFileFromFullPath(pWaza)));
+                    bustBytes,
+                    rpgBytes,
+                    wazaBytes));
             }
 
             if (validSwapTargets.Count < 2)

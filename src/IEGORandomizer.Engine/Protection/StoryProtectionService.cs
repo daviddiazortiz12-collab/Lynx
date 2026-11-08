@@ -37,9 +37,12 @@ namespace IEGORandomizer.Engine.Protection
         /// <summary>Story match hashes (<c>btlXXXX</c>) triggered by Squirrel scripts or main story progression.</summary>
         public HashSet<int> ScriptedMatchHashes { get; } = new();
 
-        /// <summary>Story <c>TeamConfigID</c> (<c>tsXXXX</c>) and <c>TeamParamID</c> (<c>para_tsXXXX</c>) referenced by scripted matches.</summary>
+        /// <summary>Story <c>TeamConfigID</c> (<c>tsXXXX</c>) and <c>TeamParamID</c> (<c>para_tsXXXX</c>) explicitly pinned by team scripts or manual overrides.</summary>
         public HashSet<int> ScriptedTeamConfigHashes { get; } = new();
         public HashSet<int> ScriptedTeamParamHashes { get; } = new();
+
+        /// <summary>Preset Raimon story <c>TeamConfigID</c> entries (composed predominantly of Raimon core members) whose kit/emblem are preserved in story cutscenes.</summary>
+        public HashSet<int> RaimonCoreTeamConfigHashes { get; } = new();
 
         /// <summary>All Key Items (<c>ITEM_IMPORTANT</c>), route lock tickets, script-checked items, and funcpt items that MUST NEVER be overwritten or lost.</summary>
         public HashSet<int> ProtectedItemHashes { get; } = new();
@@ -200,18 +203,38 @@ namespace IEGORandomizer.Engine.Protection
                 var nutb = NutbScriptAuditor.AuditArchive(game.IE_A.Directory);
                 ctx.NutbAudit = nutb;
 
-                foreach (string charCode in nutb.ReferencedCharacterIds)
+                // Only party-recruitment ("para_cpXXXX") and in-match battle script ("CMND_BTL_*") character IDs
+                // lock a character's CharaParam slot; general map cutscene "cpXXXX" model literals only register BaseHash.
+                foreach (string partyCode in nutb.ReferencedPartyParamIds)
                 {
-                    if (charCode.StartsWith("para_cp", StringComparison.Ordinal))
+                    if (partyCode.StartsWith("para_cp", StringComparison.Ordinal))
                     {
-                        ctx.ProtectedStoryPlayerParamHashes.Add(Level5IdHelper.ComputeCrc32Utf8(charCode));
-                        string cp = charCode.Substring("para_".Length);
+                        ctx.ProtectedStoryPlayerParamHashes.Add(Level5IdHelper.ComputeCrc32Utf8(partyCode));
+                        string cp = partyCode.Substring("para_".Length);
                         ctx.ProtectedStoryPlayerBaseHashes.Add(Level5IdHelper.ComputeCrc32Utf8(cp));
                     }
-                    else if (charCode.StartsWith("cp", StringComparison.Ordinal))
+                }
+
+                foreach (string btlCharCode in nutb.ReferencedBattleCharacterIds)
+                {
+                    if (btlCharCode.StartsWith("para_cp", StringComparison.Ordinal))
                     {
-                        ctx.ProtectedStoryPlayerBaseHashes.Add(Level5IdHelper.ComputeCrc32Utf8(charCode));
-                        ctx.ProtectedStoryPlayerParamHashes.Add(Level5IdHelper.ComputeCrc32Utf8("para_" + charCode));
+                        ctx.ProtectedStoryPlayerParamHashes.Add(Level5IdHelper.ComputeCrc32Utf8(btlCharCode));
+                        string cp = btlCharCode.Substring("para_".Length);
+                        ctx.ProtectedStoryPlayerBaseHashes.Add(Level5IdHelper.ComputeCrc32Utf8(cp));
+                    }
+                    else if (btlCharCode.StartsWith("cp", StringComparison.Ordinal))
+                    {
+                        ctx.ProtectedStoryPlayerBaseHashes.Add(Level5IdHelper.ComputeCrc32Utf8(btlCharCode));
+                        ctx.ProtectedStoryPlayerParamHashes.Add(Level5IdHelper.ComputeCrc32Utf8("para_" + btlCharCode));
+                    }
+                }
+
+                foreach (string cutsceneCode in nutb.ReferencedCutsceneModelIds)
+                {
+                    if (cutsceneCode.StartsWith("cp", StringComparison.Ordinal))
+                    {
+                        ctx.ProtectedStoryPlayerBaseHashes.Add(Level5IdHelper.ComputeCrc32Utf8(cutsceneCode));
                     }
                 }
 
@@ -244,27 +267,54 @@ namespace IEGORandomizer.Engine.Protection
                 }
             }
 
-            // Resolve SoccerInfo -> TeamParamID -> TeamConfigID links for scripted matches
+            // Resolve explicit manual match overrides (_extraProtectedMatchCodes) and identify Raimon's own preset story rosters.
+            // IMPORTANT: Do NOT mark rival story matches (Script/NextScript/btlXXXX) or 5v5 pachangas (VictoryCondition 1..4)
+            // as ScriptedTeamConfigHashes/ScriptedTeamParamHashes — individual scripted player slots on rival teams are already
+            // protected via ProtectedStoryPlayerParamHashes, allowing all rival rosters, formations, emblems, and kits to randomize!
             if (options.EnableStorySoftlockProtection)
             {
-                var soccers = game.GetSoccers() ?? Array.Empty<ISoccerInfo>();
-                var teamParams = game.GetTeamParams() ?? Array.Empty<ITeamParamInfo>();
-                var paramById = teamParams
-                    .Where(tp => tp.TeamParamID != 0)
-                    .GroupBy(tp => tp.TeamParamID)
-                    .ToDictionary(g => g.Key, g => g.First());
-
-                foreach (var soccer in soccers)
+                var raimonCoreParams = new HashSet<int>();
+                for (int modelNum = 1; modelNum <= 17; modelNum++)
                 {
-                    bool isScriptedSoccer = ctx.ScriptedMatchHashes.Contains(soccer.SoccerID) ||
-                                            soccer.Script != 0 ||
-                                            soccer.NextScript != 0 ||
-                                            soccer.VictoryCondition != 0;
+                    raimonCoreParams.Add(Level5IdHelper.ComputeCrc32Utf8($"para_cp{modelNum:D4}"));
+                }
 
-                    if (isScriptedSoccer)
+                var storyTeams = game.GetStoryTeamsOnly() ?? Array.Empty<IStoryTeamInfo>();
+                foreach (var st in storyTeams)
+                {
+                    if (st.TeamConfigID == 0)
+                        continue;
+
+                    int raimonMembers = 0;
+                    for (int slot = 1; slot <= 16; slot++)
                     {
-                        ctx.ScriptedMatchHashes.Add(soccer.SoccerID);
-                        if (soccer.TeamParamID != 0)
+                        int pHash = TeamSlotAccessor.GetStoryPlayer(st, slot);
+                        if (pHash != 0 && raimonCoreParams.Contains(pHash))
+                        {
+                            raimonMembers++;
+                        }
+                    }
+
+                    if (raimonMembers >= 3)
+                    {
+                        ctx.RaimonCoreTeamConfigHashes.Add(st.TeamConfigID);
+                    }
+                }
+
+                if (_extraProtectedMatchCodes.Count > 0)
+                {
+                    var manualMatchHashes = new HashSet<int>(
+                        _extraProtectedMatchCodes.Select(m => Level5IdHelper.ComputeCrc32Utf8(m.ToLowerInvariant())));
+                    var soccers = game.GetSoccers() ?? Array.Empty<ISoccerInfo>();
+                    var teamParams = game.GetTeamParams() ?? Array.Empty<ITeamParamInfo>();
+                    var paramById = teamParams
+                        .Where(tp => tp.TeamParamID != 0)
+                        .GroupBy(tp => tp.TeamParamID)
+                        .ToDictionary(g => g.Key, g => g.First());
+
+                    foreach (var soccer in soccers)
+                    {
+                        if (manualMatchHashes.Contains(soccer.SoccerID) && soccer.TeamParamID != 0)
                         {
                             ctx.ScriptedTeamParamHashes.Add(soccer.TeamParamID);
                             if (paramById.TryGetValue(soccer.TeamParamID, out var tp) && tp.TeamConfigID != 0)

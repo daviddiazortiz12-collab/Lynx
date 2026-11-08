@@ -10,6 +10,7 @@ using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using IEGORandomizer.App;
 using IEGORandomizer.App.Services;
+using IEGORandomizer.Engine.Diagnostics;
 using IEGORandomizer.Engine.Seeding;
 using Lynx.Core.RomFs;
 using Microsoft.AspNetCore.Builder;
@@ -19,8 +20,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-// Run CLI mode when --cli or -i/--input is passed on the command line
+// Run CLI mode when --cli, --diagnose, or -i/--input is passed on the command line
 if (args.Any(a => a.Equals("--cli", StringComparison.OrdinalIgnoreCase) ||
+                  a.Equals("--diagnose", StringComparison.OrdinalIgnoreCase) ||
                   a.Equals("--input", StringComparison.OrdinalIgnoreCase) ||
                   a.Equals("-i", StringComparison.OrdinalIgnoreCase) ||
                   a.Equals("--help", StringComparison.OrdinalIgnoreCase) ||
@@ -93,9 +95,15 @@ app.MapGet("/app.js", () => ServeEmbeddedOrPhysicalAsset(resolvedWwwroot, "app.j
 app.MapGet("/api/health", () => Results.Ok(new
 {
     status = "ok",
-    version = "1.0.0",
+    version = "1.0.2",
     app = "IEGO Randomizer (Inazuma Eleven GO: Luz y Sombra)",
     platform = Environment.OSVersion.Platform.ToString()
+}));
+
+app.MapGet("/api/citra/paths", () => Results.Ok(new
+{
+    defaultModsRoot = LocalDiagnosticService.ResolveDefaultCitraModsRoot(),
+    discoveredRoots = LocalDiagnosticService.DiscoverCitraModsRoots()
 }));
 
 app.MapGet("/api/seed/random", () => Results.Ok(new
@@ -176,22 +184,36 @@ app.MapPost("/api/inspect", async (HttpContext ctx) =>
             string direct = Path.Combine(full, "ie_a.fa");
             string nested = Path.Combine(full, "romfs", "ie_a.fa");
             string found = File.Exists(direct) ? direct : (File.Exists(nested) ? nested : null);
+            string bannerFile = Path.Combine(full, "ctr", "exsave", "banner.icn");
+            string bannerTitle = File.Exists(bannerFile)
+                ? LocalDiagnosticService.TryReadSmdhBannerTitle(bannerFile)
+                : string.Empty;
+
             if (found == null)
             {
-                return Results.BadRequest(new { error = "La carpeta seleccionada no contiene 'ie_a.fa' ni 'romfs/ie_a.fa'." });
+                bool hasFixXr = File.Exists(Path.Combine(full, "fix.xr"));
+                string detail = hasFixXr
+                    ? "Se detectó 'fix.xr' de RomFS pero falta 'ie_a.fa' (~855 MB) dentro de esta carpeta."
+                    : "La carpeta seleccionada no contiene 'ie_a.fa' ni 'romfs/ie_a.fa'.";
+                return Results.BadRequest(new { error = detail });
             }
 
+            var hintedEdition = TitleIdCatalog.DetectEditionFromPathHint(full);
+            string resolvedTid = hintedEdition == GameEdition.Auto
+                ? string.Empty
+                : TitleIdCatalog.GetDefaultTitleId(hintedEdition);
             var fi = new FileInfo(found);
+            string bannerSuffix = string.IsNullOrWhiteSpace(bannerTitle) ? string.Empty : $" [{bannerTitle}]";
             return Results.Ok(new
             {
                 valid = true,
                 kind = GameInputKind.RomFsDirectory.ToString(),
-                detectedEdition = GameEdition.Auto.ToString(),
-                titleId = string.Empty,
+                detectedEdition = hintedEdition.ToString(),
+                titleId = resolvedTid,
                 productCode = string.Empty,
                 isEncrypted = false,
                 sizeBytes = fi.Length,
-                summary = $"Carpeta RomFS válida ({fi.Length / (1024.0 * 1024.0):F1} MB en ie_a.fa) — Lectura segura"
+                summary = $"Carpeta RomFS válida ({fi.Length / (1024.0 * 1024.0):F1} MB en ie_a.fa){bannerSuffix} — Recuerda instalar el mod en Citra (load/mods)"
             });
         }
 
@@ -236,6 +258,46 @@ app.MapPost("/api/inspect", async (HttpContext ctx) =>
     }
 });
 
+app.MapPost("/api/diagnose", async (HttpContext ctx) =>
+{
+    var body = await ctx.Request.ReadFromJsonAsync<DiagnoseRequest>();
+    if (body == null || string.IsNullOrWhiteSpace(body.InputPath))
+        return Results.BadRequest(new { error = "Selecciona primero la ruta de entrada del juego para diagnosticar." });
+
+    try
+    {
+        Enum.TryParse<GameEdition>(body.Edition ?? "Auto", ignoreCase: true, out var ed);
+        var report = LocalDiagnosticService.RunDiagnostics(body.InputPath.Trim(), ed, body.TargetOutputOrCitraDir);
+        return Results.Ok(report);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapPost("/api/citra/install", async (HttpContext ctx) =>
+{
+    var body = await ctx.Request.ReadFromJsonAsync<CitraInstallRequest>();
+    if (body == null || string.IsNullOrWhiteSpace(body.SourcePath))
+        return Results.BadRequest(new { error = "Indica la carpeta de salida o archivo ie_a.fa generado." });
+
+    try
+    {
+        Enum.TryParse<GameEdition>(body.Edition ?? "Light", ignoreCase: true, out var ed);
+        var result = LocalDiagnosticService.InstallIeAFaToCitraMods(
+            body.SourcePath.Trim(),
+            ed,
+            body.CustomTitleIdOverride,
+            body.CitraModsRoot);
+        return Results.Ok(result);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
 app.MapPost("/api/jobs", (GenerateRunRequest request, JobManager jobs) =>
 {
     if (request == null || string.IsNullOrWhiteSpace(request.InputPath))
@@ -259,7 +321,7 @@ app.Lifetime.ApplicationStarted.Register(() =>
 {
     string localUrl = $"http://127.0.0.1:{port}";
     Console.WriteLine("================================================================");
-    Console.WriteLine("  IEGO RANDOMIZER v1.0 — Inazuma Eleven GO: Luz y Sombra");
+    Console.WriteLine("  IEGO RANDOMIZER v1.0.2 — Inazuma Eleven GO: Luz y Sombra");
     Console.WriteLine("================================================================");
     Console.WriteLine($"  Interfaz activa en : {localUrl}");
     Console.WriteLine("  Estado             : Listo (Mantén esta ventana abierta mientras usas el programa)");
@@ -325,4 +387,19 @@ internal sealed class InspectPathRequest
 internal sealed class OpenFolderRequest
 {
     public string FolderPath { get; set; }
+}
+
+internal sealed class DiagnoseRequest
+{
+    public string InputPath { get; set; }
+    public string Edition { get; set; }
+    public string TargetOutputOrCitraDir { get; set; }
+}
+
+internal sealed class CitraInstallRequest
+{
+    public string SourcePath { get; set; }
+    public string Edition { get; set; }
+    public string CustomTitleIdOverride { get; set; }
+    public string CitraModsRoot { get; set; }
 }

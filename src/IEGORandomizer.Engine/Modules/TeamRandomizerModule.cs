@@ -83,17 +83,56 @@ namespace IEGORandomizer.Engine.Modules
                     tacticPool.Add(tp.TacticID);
             }
 
-            // 1. Randomize Shirt / Kit Numbers (1..99, unique per team)
-            if (options.RandomizeKitNumbers)
+            // Build valid Emblem1 pool from existing teams + /data/emblem/embXXXX.xi
+            var emblemPool = new HashSet<int>();
+            foreach (var st in storyTeams)
+            {
+                if (st.Emblem1 > 0) emblemPool.Add(st.Emblem1);
+            }
+            foreach (var et in encountTeams)
+            {
+                if (et.Emblem1 > 0) emblemPool.Add(et.Emblem1);
+            }
+            var emblemDir = game.GetDirectory("emblem");
+            if (emblemDir != null)
+            {
+                foreach (string fName in emblemDir.Files.Keys)
+                {
+                    if (fName.StartsWith("emb", StringComparison.OrdinalIgnoreCase) &&
+                        fName.EndsWith(".xi", StringComparison.OrdinalIgnoreCase) &&
+                        int.TryParse(fName.Substring(3, fName.Length - 6), out int embNum) &&
+                        embNum > 0)
+                    {
+                        emblemPool.Add(embNum);
+                    }
+                }
+            }
+            var orderedEmblemPool = emblemPool.OrderBy(x => x).ToList();
+
+            // 1. Randomize Shirt / Kit Numbers (1..99, unique per team) and Team Emblems
+            if (options.RandomizeKitNumbers || (options.RandomizeEmblems && orderedEmblemPool.Count > 1))
             {
                 DeterministicRng kitNumRng = seeds.GetSubsystem("teams.kit_numbers");
+                DeterministicRng emblemRng = seeds.GetSubsystem("teams.emblems");
+
                 if (options.RandomizeStoryAndRouteTeams)
                 {
                     foreach (var st in storyTeams)
                     {
                         if (protection.ScriptedTeamConfigHashes.Contains(st.TeamConfigID))
                             continue;
-                        AssignStoryShirtNumbers(st, kitNumRng, keepGoalkeeperNo1: true);
+
+                        if (options.RandomizeKitNumbers)
+                        {
+                            AssignStoryShirtNumbers(st, kitNumRng, keepGoalkeeperNo1: true);
+                        }
+
+                        if (options.RandomizeEmblems &&
+                            orderedEmblemPool.Count > 1 &&
+                            !protection.RaimonCoreTeamConfigHashes.Contains(st.TeamConfigID))
+                        {
+                            st.Emblem1 = PickDifferentInt(orderedEmblemPool, st.Emblem1, emblemRng);
+                        }
                     }
                 }
 
@@ -101,7 +140,15 @@ namespace IEGORandomizer.Engine.Modules
                 {
                     foreach (var et in encountTeams)
                     {
-                        AssignEncountShirtNumbers(et, kitNumRng);
+                        if (options.RandomizeKitNumbers)
+                        {
+                            AssignEncountShirtNumbers(et, kitNumRng);
+                        }
+
+                        if (options.RandomizeEmblems && orderedEmblemPool.Count > 1)
+                        {
+                            et.Emblem1 = PickDifferentInt(orderedEmblemPool, et.Emblem1, emblemRng);
+                        }
                     }
                 }
 
@@ -123,7 +170,8 @@ namespace IEGORandomizer.Engine.Modules
                     continue;
 
                 bool isPachanga = encountTeamIds.Contains(tp.TeamConfigID);
-                bool isScriptedStory = protection.ScriptedTeamParamHashes.Contains(tp.TeamParamID) ||
+                bool isScriptedStory = protection.RaimonCoreTeamConfigHashes.Contains(tp.TeamConfigID) ||
+                                       protection.ScriptedTeamParamHashes.Contains(tp.TeamParamID) ||
                                        protection.ScriptedTeamConfigHashes.Contains(tp.TeamConfigID);
 
                 if (isPachanga && !options.RandomizePachangaTeams)
@@ -234,6 +282,19 @@ namespace IEGORandomizer.Engine.Modules
                     continue;
                 TeamSlotAccessor.SetEncountKitNumber(team, slot, available[cursor++ % available.Count]);
             }
+        }
+
+        private static int PickDifferentInt(IReadOnlyList<int> pool, int current, DeterministicRng rng)
+        {
+            if (pool.Count == 1)
+                return pool[0];
+            for (int i = 0; i < 6; i++)
+            {
+                int candidate = rng.PickOne(pool);
+                if (candidate != current)
+                    return candidate;
+            }
+            return rng.PickOne(pool);
         }
     }
 }

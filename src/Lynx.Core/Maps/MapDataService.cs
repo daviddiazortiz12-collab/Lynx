@@ -34,7 +34,7 @@ namespace Lynx.Core.Maps
                         continue;
 
                     string fullVirtualPath = $"/data/map/{mapFolder.Name}/{fileName}";
-                    byte[] bytes = mapFolder.GetFileFromFullPath("/" + fileName);
+                    byte[] bytes = Arc0SafeArchive.TryReadFileFromPath(mapFolder, fileName);
                     if (bytes == null || bytes.Length < 16)
                         continue;
 
@@ -113,7 +113,7 @@ namespace Lynx.Core.Maps
                         continue;
 
                     string fullVirtualPath = $"/data/map/{mapFolder.Name}/{fileName}";
-                    byte[] bytes = mapFolder.GetFileFromFullPath("/" + fileName);
+                    byte[] bytes = Arc0SafeArchive.TryReadFileFromPath(mapFolder, fileName);
                     if (bytes == null || bytes.Length < 16)
                         continue;
 
@@ -202,12 +202,12 @@ namespace Lynx.Core.Maps
 
                     if (fileName.EndsWith("_funcpt.bin", StringComparison.OrdinalIgnoreCase))
                     {
-                        byte[] bytes = mapFolder.GetFileFromFullPath("/" + fileName);
+                        byte[] bytes = Arc0SafeArchive.TryReadFileFromPath(mapFolder, fileName);
                         ScanFuncpointFile(bytes, deps, virtualPath);
                     }
                     else if (fileName.EndsWith(".talk.bin", StringComparison.OrdinalIgnoreCase))
                     {
-                        byte[] bytes = mapFolder.GetFileFromFullPath("/" + fileName);
+                        byte[] bytes = Arc0SafeArchive.TryReadFileFromPath(mapFolder, fileName);
                         ScanTalkFile(bytes, deps, virtualPath);
                     }
                 }

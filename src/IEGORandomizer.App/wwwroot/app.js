@@ -29,6 +29,28 @@
   $("btnRandomSeed").addEventListener("click", requestRandomSeed);
   requestRandomSeed();
 
+  // Discover local Citra/Azahar/Lime3DS mods folder on startup
+  (async function initCitraPaths() {
+    try {
+      const res = await fetch("api/citra/paths");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.defaultModsRoot && !$("citraModsRootInput").value) {
+        $("citraModsRootInput").value = data.defaultModsRoot;
+      }
+      if (data && Array.isArray(data.discoveredRoots) && data.discoveredRoots.length > 0) {
+        $("expDirectCitra").checked = true;
+        $("directCitraPathRow").classList.remove("hidden");
+      }
+    } catch {
+      // Non-fatal
+    }
+  })();
+
+  $("expDirectCitra").addEventListener("change", () => {
+    $("directCitraPathRow").classList.toggle("hidden", !$("expDirectCitra").checked);
+  });
+
   $("btnCopySeed").addEventListener("click", async () => {
     const val = $("seedInput").value.trim();
     if (!val) return;
@@ -214,6 +236,59 @@
     openPicker("inputPath", "folder", "Seleccionar carpeta RomFS extraída"));
   $("btnPickOutputFolder").addEventListener("click", () =>
     openPicker("outputDir", "folder", "Seleccionar carpeta de salida separada"));
+  $("btnPickCitraModsFolder").addEventListener("click", () =>
+    openPicker("citraModsRootInput", "folder", "Seleccionar carpeta load/mods de Citra o Azahar"));
+
+  // Local Diagnostic Mode (zero spoilers)
+  $("btnDiagnoseLocal").addEventListener("click", async () => {
+    const diagBox = $("diagnosticResultBox");
+    const inputPath = $("inputPath").value.trim();
+    if (!inputPath) {
+      diagBox.className = "result-box failure";
+      diagBox.innerHTML = "<strong>Falta entrada:</strong> Selecciona primero tu archivo <code>ie_a.fa</code>, carpeta <code>RomFS</code> o <code>.3ds</code>.";
+      diagBox.classList.remove("hidden");
+      return;
+    }
+
+    $("btnDiagnoseLocal").disabled = true;
+    diagBox.className = "result-box";
+    diagBox.innerHTML = "⏳ Analizando archivo ARC0, tablas internas y carpetas de mods de Citra...";
+    diagBox.classList.remove("hidden");
+
+    try {
+      const res = await fetch("api/diagnose", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inputPath,
+          edition: $("editionSelect").value,
+          targetOutputOrCitraDir: $("outputDir").value.trim() || $("citraModsRootInput").value.trim()
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "No se pudo ejecutar el diagnóstico.");
+
+      const warningsHtml = (data.actionableWarnings || [])
+        .map((w) => `<li style="color:#fcd34d;margin-bottom:4px;">⚠️ ${escapeHtml(w)}</li>`)
+        .join("");
+      const findingsHtml = (data.findings || [])
+        .map((f) => `<li style="margin-bottom:3px;">✓ ${escapeHtml(f)}</li>`)
+        .join("");
+
+      diagBox.className = data.hasValidIeAFa ? "result-box success" : "result-box failure";
+      diagBox.innerHTML = `
+        <div><strong>🔍 Diagnóstico Forense Local (${escapeHtml(data.inputKind || "Entrada")})</strong></div>
+        ${data.bannerTitleSummary ? `<div style="font-size:0.84rem;color:#93c5fd;margin-top:3px;">Banner 3DS: ${escapeHtml(data.bannerTitleSummary)}</div>` : ""}
+        ${warningsHtml ? `<ul style="margin:8px 0;padding-left:18px;">${warningsHtml}</ul>` : ""}
+        <ul style="margin:8px 0 0;padding-left:18px;font-size:0.85rem;">${findingsHtml}</ul>
+      `;
+    } catch (err) {
+      diagBox.className = "result-box failure";
+      diagBox.innerHTML = `<strong>Error en diagnóstico:</strong> ${escapeHtml(err.message)}`;
+    } finally {
+      $("btnDiagnoseLocal").disabled = false;
+    }
+  });
 
   $("btnCloseModal").addEventListener("click", closeModal);
   $("btnModalCancel").addEventListener("click", closeModal);
@@ -273,6 +348,7 @@
         randomizeStoryAndRouteTeams: $("tmStory").checked,
         randomizePachangaTeams: $("tmPachanga").checked,
         randomizeKitNumbers: $("tmNumbers").checked,
+        randomizeEmblems: $("tmEmblems").checked,
         randomizeFormations: $("tmFormations").checked,
         randomizeCoaches: $("tmCoaches").checked,
         randomizeTactics: $("tmTactics").checked,
@@ -304,7 +380,8 @@
         exportStandaloneIeAFa: $("expStandalone").checked,
         exportCitraModStructure: $("expCitra").checked,
         exportLuma3dsLayeredFsStructure: $("expLayeredFs").checked,
-        customTitleIdOverride: $("titleIdOverride").value
+        customTitleIdOverride: $("titleIdOverride").value,
+        directCitraModsRootPath: $("expDirectCitra").checked ? $("citraModsRootInput").value.trim() : ""
       }
     };
   }
@@ -381,26 +458,68 @@
           .join("");
 
         const currentOutDir = $("outputDir").value.trim();
+        const diff = rep.persistedDiffTelemetry;
+        const diffSummaryHtml = diff
+          ? `<div class="metric-pill"><strong>Archivos internos modificados en disco:</strong> ${diff.persistedModifiedFilesCount} (Rivales: ${diff.persistedChangedStoryTeamsCount}, Pachangas: ${diff.persistedChangedPachangaTeamsCount}, Técnicas: ${diff.persistedChangedSkillTableEntriesCount})</div>`
+          : "";
+        const citraInstallBanner = rep.directCitraInstalledPath
+          ? `<div style="margin-top:6px;padding:7px 10px;border-radius:8px;background:rgba(16,185,129,0.16);border:1px solid rgba(16,185,129,0.4);font-size:0.84rem;">🎮 <strong>Instalado directo en Citra:</strong> <code>${escapeHtml(rep.directCitraInstalledPath)}</code></div>`
+          : "";
+
         resultBox.className = "result-box success";
         resultBox.innerHTML = `
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-            <div><strong>✅ ¡Partida generada y verificada correctamente!</strong> ${rep.blindPlayMode ? "<span>(Modo a Ciegas activo: 0 spoilers mostrados)</span>" : ""}</div>
-            <button type="button" class="btn btn-secondary" id="btnOpenGeneratedFolder">📂 Abrir carpeta de salida</button>
+            <div><strong>✅ ¡Partida generada y verificada en disco!</strong> ${rep.blindPlayMode ? "<span>(Modo a Ciegas activo: 0 spoilers mostrados)</span>" : ""}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button type="button" class="btn btn-primary" id="btnInstallToCitraNow">🎮 Instalar directo en Citra</button>
+              <button type="button" class="btn btn-secondary" id="btnOpenGeneratedFolder">📂 Abrir carpeta de salida</button>
+            </div>
           </div>
+          ${citraInstallBanner}
+          <div id="citraQuickInstallMsg" style="margin-top:6px;font-size:0.84rem;"></div>
           <div class="result-grid">
             <div class="metric-pill"><strong>Seed:</strong> <code>${escapeHtml(rep.seed)}</code></div>
             <div class="metric-pill"><strong>Huella:</strong> <code>${escapeHtml(rep.seedFingerprint)}</code></div>
             <div class="metric-pill"><strong>Edición / TitleID:</strong> ${escapeHtml(rep.effectiveEdition)} (<code>${escapeHtml(rep.resolvedTitleId)}</code>)</div>
             <div class="metric-pill"><strong>Objetos Clave protegidos:</strong> ${rep.protectedKeyItemsCount}</div>
+            ${diffSummaryHtml}
           </div>
           <details>
-            <summary style="cursor:pointer;font-weight:600;">Ver comprobaciones de integridad y rutas exportadas</summary>
+            <summary style="cursor:pointer;font-weight:600;">Ver comprobaciones de persistencia ARC0 y rutas exportadas</summary>
             <ul style="margin:8px 0 6px;padding-left:18px;">${checksHtml}</ul>
             <div style="margin-top:6px;"><strong>Archivos generados:</strong></div>
             <ul style="margin:4px 0 0;padding-left:18px;">${exportsHtml}</ul>
           </details>
         `;
         resultBox.classList.remove("hidden");
+
+        const installBtn = $("btnInstallToCitraNow");
+        if (installBtn) {
+          installBtn.addEventListener("click", async () => {
+            installBtn.disabled = true;
+            const msgEl = $("citraQuickInstallMsg");
+            msgEl.textContent = "⏳ Copiando romfs/ie_a.fa en la carpeta de mods de Citra...";
+            try {
+              const r = await fetch("api/citra/install", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  sourcePath: currentOutDir,
+                  edition: rep.effectiveEdition || $("editionSelect").value,
+                  customTitleIdOverride: $("titleIdOverride").value,
+                  citraModsRoot: $("citraModsRootInput").value.trim()
+                })
+              });
+              const d = await r.json();
+              if (!r.ok) throw new Error(d.error || "No se pudo instalar en Citra.");
+              msgEl.innerHTML = `✅ <strong>Listo para jugar en Citra:</strong> <code>${escapeHtml(d.installedIeAFaPath)}</code> (Recuerda iniciar <strong>Partida Nueva</strong> para ver las nuevas técnicas iniciales del Raimon).`;
+            } catch (e) {
+              msgEl.innerHTML = `⚠️ ${escapeHtml(e.message)}`;
+            } finally {
+              installBtn.disabled = false;
+            }
+          });
+        }
 
         const openBtn = $("btnOpenGeneratedFolder");
         if (openBtn) {

@@ -63,6 +63,7 @@ namespace IEGORandomizer.Engine.Configuration
         public bool RandomizeStoryAndRouteTeams { get; set; } = true;
         public bool RandomizePachangaTeams { get; set; } = true;
         public bool RandomizeKitNumbers { get; set; } = true;
+        public bool RandomizeEmblems { get; set; } = true;
         public bool RandomizeFormations { get; set; } = true;
         public bool RandomizeCoaches { get; set; } = true;
         public bool RandomizeTactics { get; set; } = true;
@@ -103,5 +104,6 @@ namespace IEGORandomizer.Engine.Configuration
         public bool ExportCitraModStructure { get; set; } = true;
         public bool ExportLuma3dsLayeredFsStructure { get; set; } = true;
         public string CustomTitleIdOverride { get; set; } = string.Empty;
+        public string DirectCitraModsRootPath { get; set; } = string.Empty;
     }
 }

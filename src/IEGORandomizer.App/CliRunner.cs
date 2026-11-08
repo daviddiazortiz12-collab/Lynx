@@ -3,12 +3,13 @@ using System.IO;
 using System.Text.Json;
 using IEGORandomizer.Engine;
 using IEGORandomizer.Engine.Configuration;
+using IEGORandomizer.Engine.Diagnostics;
 using Lynx.Core.RomFs;
 
 namespace IEGORandomizer.App
 {
     /// <summary>
-    /// Headless command-line runner for batch execution and automated testing.
+    /// Headless command-line runner for batch execution, local diagnostics, and automated testing.
     /// </summary>
     public static class CliRunner
     {
@@ -17,6 +18,8 @@ namespace IEGORandomizer.App
             string inputPath = null;
             string outputDir = null;
             string configJsonPath = null;
+            bool diagnoseMode = false;
+            bool jsonOutput = false;
             var options = new RandomizerOptions();
 
             for (int i = 0; i < args.Length; i++)
@@ -25,6 +28,12 @@ namespace IEGORandomizer.App
                 switch (arg)
                 {
                     case "--cli":
+                        break;
+                    case "--diagnose":
+                        diagnoseMode = true;
+                        break;
+                    case "--json":
+                        jsonOutput = true;
                         break;
                     case "--input":
                     case "-i":
@@ -51,6 +60,16 @@ namespace IEGORandomizer.App
                             };
                         }
                         break;
+                    case "--install-citra":
+                        if (i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
+                        {
+                            options.Export.DirectCitraModsRootPath = args[++i];
+                        }
+                        else
+                        {
+                            options.Export.DirectCitraModsRootPath = LocalDiagnosticService.ResolveDefaultCitraModsRoot();
+                        }
+                        break;
                     case "--no-blind":
                         options.BlindPlayMode = false;
                         break;
@@ -62,6 +81,11 @@ namespace IEGORandomizer.App
                         PrintHelp();
                         return 0;
                 }
+            }
+
+            if (diagnoseMode)
+            {
+                return RunDiagnosticCli(inputPath, options.Edition, outputDir, jsonOutput);
             }
 
             if (!string.IsNullOrWhiteSpace(configJsonPath) && File.Exists(configJsonPath))
@@ -82,9 +106,9 @@ namespace IEGORandomizer.App
 
             try
             {
-                Console.WriteLine("============================================================");
-                Console.WriteLine("  IEGO RANDOMIZER — Inazuma Eleven GO: Luz y Sombra (CLI)");
-                Console.WriteLine("============================================================");
+                Console.WriteLine("================================================================");
+                Console.WriteLine("  IEGO RANDOMIZER v1.0.2 — Inazuma Eleven GO: Luz y Sombra (CLI)");
+                Console.WriteLine("================================================================");
 
                 var coordinator = new RandomizerCoordinator();
                 int lastPrintedPct = -1;
@@ -109,6 +133,18 @@ namespace IEGORandomizer.App
                 Console.WriteLine($"  Modo Partida a Ciegas   : {(report.BlindPlayMode ? "ACTIVADO (Sin spoilers)" : "Desactivado")}");
                 Console.WriteLine($"  Original sin modificar  : {(report.SourceImmutabilityVerified ? "SÍ (SHA-256 idéntico)" : "NO")}");
                 Console.WriteLine($"  Integridad verificada   : {(report.OutputIntegrityVerified ? "SÍ" : "NO")}");
+                if (report.PersistedDiffTelemetry != null)
+                {
+                    var d = report.PersistedDiffTelemetry;
+                    Console.WriteLine($"  Cambios reales en disco : {d.PersistedModifiedFilesCount} archivos internos modificados " +
+                                      $"(jugadores={d.PersistedChangedCharaParamsCount}, técnicas={d.PersistedChangedSkillTableEntriesCount}, " +
+                                      $"rivales={d.PersistedChangedStoryTeamsCount}, pachangas={d.PersistedChangedPachangaTeamsCount}, " +
+                                      $"equipaciones/params={d.PersistedChangedTeamParamsCount})");
+                }
+                if (!string.IsNullOrEmpty(report.DirectCitraInstalledPath))
+                {
+                    Console.WriteLine($"  Instalado en Citra      : {report.DirectCitraInstalledPath}");
+                }
                 Console.WriteLine($"  Carpeta de exportación  : {Path.GetFullPath(outputDir)}");
                 return 0;
             }
@@ -121,19 +157,71 @@ namespace IEGORandomizer.App
             }
         }
 
+        private static int RunDiagnosticCli(string inputPath, GameEdition edition, string targetOrCitraDir, bool jsonOutput)
+        {
+            if (string.IsNullOrWhiteSpace(inputPath))
+            {
+                Console.Error.WriteLine("Error: Debe indicar --input <ruta> junto con --diagnose.");
+                return 2;
+            }
+
+            try
+            {
+                var diag = LocalDiagnosticService.RunDiagnostics(inputPath, edition, targetOrCitraDir);
+                if (jsonOutput)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(diag, new JsonSerializerOptions { WriteIndented = true }));
+                    return 0;
+                }
+
+                Console.WriteLine("================================================================");
+                Console.WriteLine("  IEGO RANDOMIZER v1.0.2 — DIAGNÓSTICO LOCAL Y MODS DE CITRA");
+                Console.WriteLine("================================================================");
+                Console.WriteLine($"  Entrada analizada : {diag.InputPath}");
+                Console.WriteLine($"  Tipo detectado    : {diag.InputKind}");
+                if (!string.IsNullOrWhiteSpace(diag.BannerTitleSummary))
+                {
+                    Console.WriteLine($"  Banner SMDH 3DS   : {diag.BannerTitleSummary}");
+                }
+                if (diag.HasValidIeAFa)
+                {
+                    Console.WriteLine($"  SHA-256 ie_a.fa   : {diag.IeAFaSha256Hex}");
+                    Console.WriteLine($"  Edición / TitleID : {diag.DetectedEdition} ({diag.ExpectedPrimaryTitleId})");
+                }
+                Console.WriteLine();
+                foreach (string f in diag.Findings)
+                {
+                    Console.WriteLine($"  [OK] {f}");
+                }
+                foreach (string w in diag.ActionableWarnings)
+                {
+                    Console.WriteLine($"  [AVISO] {w}");
+                }
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ERROR DIAGNÓSTICO] {ex.Message}");
+                return 1;
+            }
+        }
+
         public static void PrintHelp()
         {
             Console.WriteLine("Uso:");
-            Console.WriteLine("  IEGORandomizer.App                       Inicia la interfaz gráfica de escritorio (PC)");
-            Console.WriteLine("  IEGORandomizer.App --cli -i <entrada> -o <carpeta_salida> [opciones]");
+            Console.WriteLine("  IEGORandomizer                           Inicia la interfaz gráfica de escritorio (PC)");
+            Console.WriteLine("  IEGORandomizer --cli -i <entrada> -o <carpeta_salida> [opciones]");
+            Console.WriteLine("  IEGORandomizer --diagnose -i <entrada> [-o <carpeta_salida_o_citra>] [--json]");
             Console.WriteLine();
             Console.WriteLine("Opciones CLI:");
-            Console.WriteLine("  -i, --input <ruta>       Ruta al archivo .3ds desencriptado, carpeta RomFS o ie_a.fa");
-            Console.WriteLine("  -o, --output <carpeta>   Carpeta de destino separada para los archivos generados");
-            Console.WriteLine("  -s, --seed <texto>       Semilla manual reproducible (opcional)");
-            Console.WriteLine("  -e, --edition <modo>     auto | luz | sombra");
-            Console.WriteLine("  --no-blind               Desactiva el modo a ciegas y escribe spoiler_log.txt");
-            Console.WriteLine("  --config <json>          Carga opciones avanzadas desde un archivo JSON");
+            Console.WriteLine("  -i, --input <ruta>           Ruta al archivo .3ds desencriptado, carpeta RomFS o ie_a.fa");
+            Console.WriteLine("  -o, --output <carpeta>       Carpeta de destino separada para los archivos generados");
+            Console.WriteLine("  -s, --seed <texto>           Semilla manual reproducible (opcional)");
+            Console.WriteLine("  -e, --edition <modo>         auto | luz | sombra");
+            Console.WriteLine("  --install-citra [ruta_mods]  Instala también romfs/ie_a.fa directo en los mods de Citra");
+            Console.WriteLine("  --diagnose                   Analiza el archivo/RomFS y verifica la carpeta de mods de Citra");
+            Console.WriteLine("  --no-blind                   Desactiva el modo a ciegas y escribe spoiler_log.txt");
+            Console.WriteLine("  --config <json>              Carga opciones avanzadas desde un archivo JSON");
         }
     }
 }

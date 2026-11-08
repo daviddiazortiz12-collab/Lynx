@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using Lynx.Core.RomFs;
 using StudioElevenLib.Level5.Binary;
 using StudioElevenLib.Level5.Binary.Collections;
 using StudioElevenLib.Level5.Binary.Logic;
@@ -263,7 +264,7 @@ namespace Lynx.Core.Binary
             if (!soccerDir.Files.ContainsKey(cleanName))
                 return false;
 
-            byte[] bytes = soccerDir.GetFileFromFullPath("/" + cleanName);
+            byte[] bytes = Arc0SafeArchive.TryReadFileFromPath(soccerDir, cleanName);
             if (bytes == null || bytes.Length < 16)
                 return false;
 
@@ -354,7 +355,7 @@ namespace Lynx.Core.Binary
                 return;
 
             string cleanName = fileName.TrimStart('/');
-            byte[] bytes = soccerDir.GetFileFromFullPath("/" + cleanName);
+            byte[] bytes = Arc0SafeArchive.TryReadFileFromPath(soccerDir, cleanName);
             var cfg = new CfgBin<CfgTreeNode>();
             cfg.Open(bytes);
 
@@ -377,7 +378,7 @@ namespace Lynx.Core.Binary
                 idx++;
             }
 
-            soccerDir.Files[cleanName].ByteContent = cfg.Save();
+            Arc0SafeArchive.UpdateFileInDirectory(soccerDir, cleanName, cfg.Save());
         }
     }
 
@@ -419,7 +420,7 @@ namespace Lynx.Core.Binary
             if (!shopDir.Files.ContainsKey(cleanName))
                 return false;
 
-            byte[] bytes = shopDir.GetFileFromFullPath("/" + cleanName);
+            byte[] bytes = Arc0SafeArchive.TryReadFileFromPath(shopDir, cleanName);
             if (bytes == null || bytes.Length < 16)
                 return false;
 
@@ -476,7 +477,7 @@ namespace Lynx.Core.Binary
                 return;
 
             string cleanName = fileName.TrimStart('/');
-            byte[] bytes = shopDir.GetFileFromFullPath("/" + cleanName);
+            byte[] bytes = Arc0SafeArchive.TryReadFileFromPath(shopDir, cleanName);
             var cfg = new CfgBin<CfgTreeNode>();
             cfg.Open(bytes);
 
@@ -499,7 +500,7 @@ namespace Lynx.Core.Binary
                 idx++;
             }
 
-            shopDir.Files[cleanName].ByteContent = cfg.Save();
+            Arc0SafeArchive.UpdateFileInDirectory(shopDir, cleanName, cfg.Save());
         }
     }
 }

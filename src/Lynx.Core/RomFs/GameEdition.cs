@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using StudioElevenLib.Tools;
 
@@ -35,6 +36,8 @@ namespace Lynx.Core.RomFs
         public const string LightEurTitleId = "0004000000112F00";
         public const string ShadowEurTitleId = "0004000000113000";
         public const string ShadowEurAltTitleId = "000400000017C200";
+        public const string LightJpnTitleId = "000400000006D400";
+        public const string ShadowJpnTitleId = "000400000006D500";
 
         public static string GetDefaultTitleId(GameEdition edition)
         {
@@ -46,20 +49,61 @@ namespace Lynx.Core.RomFs
             if (!string.IsNullOrWhiteSpace(titleIdHex))
             {
                 string norm = titleIdHex.Trim().ToUpperInvariant();
-                if (norm == LightEurTitleId)
+                if (norm == LightEurTitleId || norm == LightJpnTitleId)
                     return GameEdition.Light;
-                if (norm == ShadowEurTitleId || norm == ShadowEurAltTitleId)
+                if (norm == ShadowEurTitleId || norm == ShadowEurAltTitleId || norm == ShadowJpnTitleId)
                     return GameEdition.Shadow;
             }
 
             if (!string.IsNullOrWhiteSpace(productCode))
             {
                 string pc = productCode.Trim().ToUpperInvariant();
-                // CTR-P-AE4P / CTR-P-AE4J (Shine / Light), CTR-P-AE5P / CTR-P-AE5J (Dark / Shadow)
+                // CTR-P-AE4P / CTR-P-AE4J (Light / Luz / Shine)
+                // CTR-P-AEDP (EUR Shadow / Sombra), CTR-P-AE5J (JPN Dark)
                 if (pc.Contains("AE4"))
                     return GameEdition.Light;
-                if (pc.Contains("AE5"))
+                if (pc.Contains("AED") || pc.Contains("AE5"))
                     return GameEdition.Shadow;
+            }
+
+            return GameEdition.Auto;
+        }
+
+        public static GameEdition DetectEditionFromPathHint(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return GameEdition.Auto;
+
+            string norm = path.ToUpperInvariant();
+            if (norm.Contains(ShadowEurTitleId) || norm.Contains(ShadowEurAltTitleId) || norm.Contains(ShadowJpnTitleId) ||
+                norm.Contains("CTR-P-AED") || norm.Contains("CTR-P-AE5") ||
+                norm.Contains("SOMBRA") || norm.Contains("SHADOW") || norm.Contains("OMBRE") || norm.Contains("OMBRA") || norm.Contains("SCHATTEN"))
+            {
+                return GameEdition.Shadow;
+            }
+
+            if (norm.Contains(LightEurTitleId) || norm.Contains(LightJpnTitleId) ||
+                norm.Contains("CTR-P-AE4") ||
+                norm.Contains("LUZ") || norm.Contains("LIGHT") || norm.Contains("LUMIERE") || norm.Contains("LUMIÈRE") || norm.Contains("LUCE") || norm.Contains("LICHT") || norm.Contains("SHINE"))
+            {
+                return GameEdition.Light;
+            }
+
+            // Check sibling RomFS ending movie signature (ed00s_c.moflex = Light/Shine, ed00d_c.moflex = Shadow/Dark)
+            try
+            {
+                string dir = Directory.Exists(path) ? path : Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+                {
+                    bool hasShineEnding = File.Exists(Path.Combine(dir, "movie", "ed00s_c.moflex"));
+                    bool hasDarkEnding = File.Exists(Path.Combine(dir, "movie", "ed00d_c.moflex"));
+                    if (hasShineEnding && !hasDarkEnding) return GameEdition.Light;
+                    if (hasDarkEnding && !hasShineEnding) return GameEdition.Shadow;
+                }
+            }
+            catch
+            {
+                // Non-fatal
             }
 
             return GameEdition.Auto;

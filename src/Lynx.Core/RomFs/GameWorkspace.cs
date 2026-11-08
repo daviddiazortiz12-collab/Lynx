@@ -76,7 +76,10 @@ namespace Lynx.Core.RomFs
                 }
 
                 var (sha, len) = InspectFileIntegrity(ieaCandidate, computeSourceSha256);
-                GameEdition edition = requestedEdition == GameEdition.Auto ? GameEdition.Light : requestedEdition;
+                GameEdition hinted = TitleIdCatalog.DetectEditionFromPathHint(fullInput);
+                GameEdition edition = requestedEdition != GameEdition.Auto
+                    ? requestedEdition
+                    : (hinted != GameEdition.Auto ? hinted : GameEdition.Light);
                 string titleId = TitleIdCatalog.GetDefaultTitleId(edition);
                 var game = new SafeGOGame(ieaCandidate, preferredLanguageCode);
 
@@ -105,7 +108,10 @@ namespace Lynx.Core.RomFs
             // Case 2: Direct ie_a.fa ARC0 file
             if (meta.Kind == GameInputKind.Arc0File)
             {
-                GameEdition edition = requestedEdition == GameEdition.Auto ? GameEdition.Light : requestedEdition;
+                GameEdition hinted = TitleIdCatalog.DetectEditionFromPathHint(fullInput);
+                GameEdition edition = requestedEdition != GameEdition.Auto
+                    ? requestedEdition
+                    : (hinted != GameEdition.Auto ? hinted : GameEdition.Light);
                 string titleId = TitleIdCatalog.GetDefaultTitleId(edition);
                 var game = new SafeGOGame(fullInput, preferredLanguageCode);
 

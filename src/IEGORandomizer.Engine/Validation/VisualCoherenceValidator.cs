@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using Lynx.Core.Games;
+using Lynx.Core.RomFs;
 using Lynx.InazumaEleven.Logic;
 using StudioElevenLib.Tools;
 
@@ -17,6 +19,9 @@ namespace IEGORandomizer.Engine.Validation
         public HashSet<int> CoherentPlayableParamHashes { get; } = new();
         public HashSet<int> CoherentPlayableBaseHashes { get; } = new();
         public HashSet<int> ValidKitNumbers { get; } = new();
+        public HashSet<int> ValidGoalkeeperKitNumbers { get; } = new();
+        public HashSet<int> ValidAwayKitNumbers { get; } = new();
+        public HashSet<int> ValidAwayGoalkeeperKitNumbers { get; } = new();
         public HashSet<int> ValidAvatarHashes { get; } = new();
         public List<string> QuarantinedEntityWarnings { get; } = new();
     }
@@ -78,22 +83,65 @@ namespace IEGORandomizer.Engine.Validation
                 profile.CoherentPlayableBaseHashes.Add(cb.BaseHash);
             }
 
-            // Validate Uniform Kit Numbers (ItemConfigUniform.ItemNumber <-> uza/uzb/uzc/uzdXXXX.xc)
+            // Validate Uniform Kit Numbers (iiuXXXX <-> uzaXXXX.xc [Home], uzbXXXX.xc [GK Home], uzcXXXX.xc [Away], uzdXXXX.xc [GK Away])
             var uniforms = game.GetItems("uniform") ?? Array.Empty<IItemConfig>();
+            var candidateKitNums = new HashSet<int>();
             foreach (var item in uniforms)
             {
                 int kitNum = ExtractUniformNumber(item);
-                if (kitNum <= 0)
-                    continue;
+                if (kitNum > 0)
+                    candidateKitNums.Add(kitNum);
+            }
 
-                if (bodyDir != null && !HasUniformBodyModels(bodyDir, kitNum))
+            if (bodyDir != null && bodyDir.Files.Count > 0)
+            {
+                foreach (string fileName in bodyDir.Files.Keys)
                 {
-                    profile.QuarantinedEntityWarnings.Add(
-                        $"Equipación #{kitNum:D4} excluida: faltan modelos 3D uza/uzb{kitNum:D4}.xc.");
-                    continue;
+                    if (fileName.StartsWith("uza", StringComparison.OrdinalIgnoreCase) &&
+                        fileName.EndsWith(".xc", StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(fileName, "uzatest.xc", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string digits = fileName.Substring(3, fileName.Length - 6);
+                        if (int.TryParse(digits, NumberStyles.Integer, CultureInfo.InvariantCulture, out int modelKitNum) && modelKitNum > 0)
+                        {
+                            candidateKitNums.Add(modelKitNum);
+                        }
+                    }
                 }
+            }
 
-                profile.ValidKitNumbers.Add(kitNum);
+            foreach (int kitNum in candidateKitNums.OrderBy(x => x))
+            {
+                if (bodyDir != null && bodyDir.Files.Count > 0)
+                {
+                    string numStr = kitNum.ToString("D4", CultureInfo.InvariantCulture);
+                    bool hasHome = bodyDir.Files.ContainsKey($"uza{numStr}.xc");
+                    if (!hasHome)
+                    {
+                        profile.QuarantinedEntityWarnings.Add(
+                            $"Equipación #{numStr} excluida: falta modelo 3D base uza{numStr}.xc.");
+                        continue;
+                    }
+
+                    bool hasGkHome = bodyDir.Files.ContainsKey($"uzb{numStr}.xc");
+                    bool hasAway = bodyDir.Files.ContainsKey($"uzc{numStr}.xc");
+                    bool hasGkAway = bodyDir.Files.ContainsKey($"uzd{numStr}.xc");
+
+                    profile.ValidKitNumbers.Add(kitNum);
+                    if (hasGkHome)
+                        profile.ValidGoalkeeperKitNumbers.Add(kitNum);
+                    if (hasAway)
+                        profile.ValidAwayKitNumbers.Add(kitNum);
+                    if (hasAway && hasGkAway)
+                        profile.ValidAwayGoalkeeperKitNumbers.Add(kitNum);
+                }
+                else
+                {
+                    profile.ValidKitNumbers.Add(kitNum);
+                    profile.ValidGoalkeeperKitNumbers.Add(kitNum);
+                    profile.ValidAwayKitNumbers.Add(kitNum);
+                    profile.ValidAwayGoalkeeperKitNumbers.Add(kitNum);
+                }
             }
 
             // Validate Fighting Spirits (Avatars)
@@ -157,7 +205,7 @@ namespace IEGORandomizer.Engine.Validation
                 return false;
             }
 
-            // Valid soccer position: 1=GK, 2=MF, 3=FW, 4=DF
+            // Valid soccer position in PlayerPositions.json: 1=GK, 2=FW, 3=MF, 4=DF
             if (cp.PlayerPosition < 1 || cp.PlayerPosition > 4)
             {
                 failureReason = $"Jugador cp{cb.ModelNumber:D4} no tiene posición de campo válida ({cp.PlayerPosition}).";
@@ -214,19 +262,25 @@ namespace IEGORandomizer.Engine.Validation
             return false;
         }
 
-        private static bool HasUniformBodyModels(VirtualDirectory bodyDir, int kitNum)
+        private static readonly Dictionary<int, int> IiuHashToKitNumber = BuildIiuHashMap();
+
+        private static Dictionary<int, int> BuildIiuHashMap()
         {
-            if (bodyDir.Files.Count == 0)
-                return true;
-            string numStr = kitNum.ToString("D4");
-            return bodyDir.Files.ContainsKey($"uza{numStr}.xc") &&
-                   bodyDir.Files.ContainsKey($"uzb{numStr}.xc");
+            var dict = new Dictionary<int, int>(10000);
+            for (int i = 1; i < 10000; i++)
+            {
+                int crc = Level5IdHelper.ComputeCrc32Utf8($"iiu{i:D4}");
+                dict.TryAdd(crc, i);
+            }
+            return dict;
         }
 
         public static int ExtractUniformNumber(IItemConfig item)
         {
             if (item == null)
                 return 0;
+            if (item.ItemID != 0 && IiuHashToKitNumber.TryGetValue(item.ItemID, out int byHash))
+                return byHash;
             var prop = item.GetType().GetProperty("ItemNumber");
             if (prop != null && prop.GetValue(item) is int num && num > 0)
                 return num;

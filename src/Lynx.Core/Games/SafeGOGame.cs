@@ -29,6 +29,8 @@ namespace Lynx.Core.Games
 
         public string SourceArchivePath { get; }
 
+        public Arc0SaveSummary LastSaveSummary { get; private set; }
+
         public SafeGOGame(string archiveFilePath, string preferredLanguageCode = null)
         {
             EncodingInitializer.EnsureRegistered();
@@ -134,9 +136,10 @@ namespace Lynx.Core.Games
                 "In-place Save() is disabled by safety policy. Use SaveCopyTo(destinationFilePath) to write to a separate output directory.");
         }
 
-        public void SaveCopyTo(string destinationIeAFaPath, IProgress<int> progress = null)
+        public Arc0SaveSummary SaveCopyTo(string destinationIeAFaPath, IProgress<int> progress = null)
         {
-            Arc0SafeArchive.SaveCopyTo(IE_A, destinationIeAFaPath, SourceArchivePath, progress);
+            LastSaveSummary = Arc0SafeArchive.SaveCopyTo(IE_A, destinationIeAFaPath, SourceArchivePath, progress);
+            return LastSaveSummary;
         }
 
         public new ICharabase[] GetCharabase()
@@ -156,7 +159,7 @@ namespace Lynx.Core.Games
                 "CHARA_BASE_INFO",
                 charabase,
                 "chara_base.cfg.bin");
-            GetFile("chara_base").ByteContent = cfg.Save();
+            WriteGameFileContent("chara_base", cfg.Save());
         }
 
         public new ICharaparam[] GetCharaparams()
@@ -176,7 +179,7 @@ namespace Lynx.Core.Games
                 "CHARA_PARAM_INFO",
                 charaparams,
                 "chara_param.cfg.bin");
-            GetFile("chara_param").ByteContent = cfg.Save();
+            WriteGameFileContent("chara_param", cfg.Save());
         }
 
         public new ISkillConfig[] GetSkillConfigs(bool emptySkillConfig = false)
@@ -203,7 +206,7 @@ namespace Lynx.Core.Games
                 "SKILL_CONFIG_INFO",
                 skills,
                 "skill_config.cfg.bin");
-            GetFile("skill_config").ByteContent = cfg.Save();
+            WriteGameFileContent("skill_config", cfg.Save());
         }
 
         public new ISkillTable[] GetSkillTable()
@@ -223,7 +226,7 @@ namespace Lynx.Core.Games
                 "SKILL_TABLE",
                 skilltable,
                 "skill_table.cfg.bin");
-            GetFile("skill_table").ByteContent = cfg.Save();
+            WriteGameFileContent("skill_table", cfg.Save());
         }
 
         public new IAvatar[] GetAvatars(bool emptyAvatar = false)
@@ -255,7 +258,7 @@ namespace Lynx.Core.Games
                     "ITEM_AVATAR",
                     avatars,
                     "item_config.cfg.bin");
-                GetFile("item_config").ByteContent = cfg.Save();
+                WriteGameFileContent("item_config", cfg.Save());
                 return;
             }
 
@@ -287,7 +290,7 @@ namespace Lynx.Core.Games
                 "TEAM_PARAM_INFO",
                 teams,
                 "team_param.cfg.bin");
-            GetFile("team_param").ByteContent = cfg.Save();
+            WriteGameFileContent("team_param", cfg.Save());
         }
 
         public IStoryTeamInfo[] GetStoryTeamsOnly()
@@ -321,7 +324,7 @@ namespace Lynx.Core.Games
                 "ENCOUNT_TEAM_INFO",
                 encounterTeams,
                 "team_config.cfg.bin");
-            GetFile("team_config").ByteContent = cfg.Save();
+            WriteGameFileContent("team_config", cfg.Save());
         }
 
         public new IItemConfig[] GetItems(string itemType)
@@ -366,7 +369,7 @@ namespace Lynx.Core.Games
                         "ITEM_KIZUNAX",
                         items,
                         "item_config.cfg.bin");
-                    GetFile("item_config").ByteContent = cfg.Save();
+                    WriteGameFileContent("item_config", cfg.Save());
                     return;
                 }
             }
@@ -374,10 +377,31 @@ namespace Lynx.Core.Games
             base.SaveItems(items);
         }
 
+        private void WriteGameFileContent(string fileKey, byte[] newBytes)
+        {
+            if (Files != null && Files.TryGetValue(fileKey, out GameSupports.GameFile gameFile) && gameFile?.File is ARC0 arc0)
+            {
+                Arc0SafeArchive.WriteFileAtPath(arc0.Directory, gameFile.Path, newBytes);
+            }
+
+            var sub = GetFile(fileKey);
+            if (sub != null)
+            {
+                Arc0SafeArchive.SetSubStreamContent(sub, newBytes);
+            }
+        }
+
         private CfgBin<CfgTreeNode> OpenCfgFile(string fileKey)
         {
-            byte[] content = GetFileContent(fileKey)
+            byte[] content = null;
+            if (Files != null && Files.TryGetValue(fileKey, out GameSupports.GameFile gameFile) && gameFile?.File is ARC0 arc0)
+            {
+                content = Arc0SafeArchive.TryReadFileFromPath(arc0.Directory, gameFile.Path);
+            }
+
+            content ??= GetFileContent(fileKey)
                 ?? throw new FileNotFoundException($"Required game table '{fileKey}' not found in ie_a.fa.");
+
             var cfg = new CfgBin<CfgTreeNode>();
             cfg.Open(content);
             return cfg;

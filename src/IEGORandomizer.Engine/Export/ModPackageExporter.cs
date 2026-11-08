@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using IEGORandomizer.Engine.Configuration;
+using IEGORandomizer.Engine.Diagnostics;
 using IEGORandomizer.Engine.Modules;
 using Lynx.Core.Games;
 using Lynx.Core.RomFs;
@@ -10,16 +11,16 @@ using Lynx.Core.RomFs;
 namespace IEGORandomizer.Engine.Export
 {
     /// <summary>
-    /// Step 11: Exports the randomized <c>ie_a.fa</c> into a clean output folder without touching
+    /// Exports the randomized <c>ie_a.fa</c> into a clean output folder without touching
     /// the original source file or interacting with physical console hardware.
     /// Supports:
     /// - Standalone <c>ie_a.fa</c>
-    /// - Citra emulator mod layout (<c>Citra/load/mods/{TitleID}/romfs/ie_a.fa</c>)
+    /// - Citra emulator mod layout (<c>Citra/load/mods/{TitleID}/romfs/ie_a.fa</c>) + optional direct Citra install
     /// - Luma3DS LayeredFS file layout (<c>Luma3DS/luma/titles/{TitleID}/romfs/ie_a.fa</c>)
     /// </summary>
     public static class ModPackageExporter
     {
-        public static void Export(
+        public static void ExportArchives(
             SafeGOGame game,
             string protectedSourcePath,
             string outputDirectory,
@@ -73,7 +74,7 @@ namespace IEGORandomizer.Engine.Export
                 (!options.Export.ExportCitraModStructure && !options.Export.ExportLuma3dsLayeredFsStructure))
             {
                 string standalonePath = Path.Combine(fullOutputDir, "Standalone", "ie_a.fa");
-                game.SaveCopyTo(standalonePath, progress);
+                report.Arc0WriteTelemetry = game.SaveCopyTo(standalonePath, progress);
                 primaryArchivePath = standalonePath;
                 report.ExportedPaths.Add(standalonePath);
             }
@@ -86,7 +87,7 @@ namespace IEGORandomizer.Engine.Export
 
                 if (primaryArchivePath == null)
                 {
-                    game.SaveCopyTo(citraTarget, progress);
+                    report.Arc0WriteTelemetry = game.SaveCopyTo(citraTarget, progress);
                     primaryArchivePath = citraTarget;
                 }
                 else
@@ -106,7 +107,7 @@ namespace IEGORandomizer.Engine.Export
 
                 if (primaryArchivePath == null)
                 {
-                    game.SaveCopyTo(lumaTarget, progress);
+                    report.Arc0WriteTelemetry = game.SaveCopyTo(lumaTarget, progress);
                     primaryArchivePath = lumaTarget;
                 }
                 else
@@ -118,11 +119,37 @@ namespace IEGORandomizer.Engine.Export
                 WriteLayeredFsReadme(Path.Combine(fullOutputDir, "Luma3DS", "LEEME_LAYEREDFS.txt"), titleId, report);
             }
 
-            // Write Blind-Play-safe manifest JSON (contains seed + verification hash + counters, ZERO spoilers)
+            // Optional direct installation into user's local Citra/Azahar/Lime3DS mods folder
+            if (!string.IsNullOrWhiteSpace(options.Export.DirectCitraModsRootPath) && primaryArchivePath != null)
+            {
+                var installResult = LocalDiagnosticService.InstallIeAFaToCitraMods(
+                    primaryArchivePath,
+                    report.EffectiveEdition,
+                    options.Export.CustomTitleIdOverride,
+                    options.Export.DirectCitraModsRootPath);
+
+                report.DirectCitraInstalledPath = installResult.InstalledIeAFaPath;
+                report.ExportedPaths.Add(installResult.InstalledIeAFaPath);
+                foreach (string msg in installResult.Messages)
+                {
+                    report.ValidationMessages.Add(msg);
+                }
+            }
+        }
+
+        public static void WriteManifestAndLogs(
+            string outputDirectory,
+            RandomizerOptions options,
+            RandomizationExecutionReport report)
+        {
+            string fullOutputDir = Path.GetFullPath(outputDirectory);
+            Directory.CreateDirectory(fullOutputDir);
+
+            // Write Blind-Play-safe manifest JSON AFTER OutputIntegrityVerified & SourceImmutabilityVerified are finalized
             string manifestPath = Path.Combine(fullOutputDir, "run_manifest.json");
             var manifestPayload = new
             {
-                generator = "IEGO Randomizer (Luz y Sombra)",
+                generator = "IEGO Randomizer (Luz y Sombra) v1.0.2",
                 seed = report.Seed,
                 verificationFingerprint = report.SeedFingerprint,
                 edition = report.EffectiveEdition.ToString(),
@@ -131,6 +158,7 @@ namespace IEGORandomizer.Engine.Export
                 generatedAtUtc = report.GeneratedAtUtc,
                 sourceImmutabilityVerified = report.SourceImmutabilityVerified,
                 outputIntegrityVerified = report.OutputIntegrityVerified,
+                directCitraInstalledPath = report.DirectCitraInstalledPath,
                 options,
                 summary = new
                 {
@@ -146,6 +174,26 @@ namespace IEGORandomizer.Engine.Export
                     randomizedRouteChests = report.RandomizedRouteChestsCount,
                     randomizedDrops = report.RandomizedMatchDropsCount,
                     randomizedUniforms = report.RandomizedTeamUniformsCount
+                },
+                arc0Telemetry = report.Arc0WriteTelemetry == null ? null : new
+                {
+                    preservedRetailTables = report.Arc0WriteTelemetry.PreservedRetailTables,
+                    originalArchiveSizeBytes = report.Arc0WriteTelemetry.OriginalArchiveSizeBytes,
+                    writtenArchiveSizeBytes = report.Arc0WriteTelemetry.WrittenArchiveSizeBytes,
+                    detectedDataAlignment = report.Arc0WriteTelemetry.DetectedDataAlignment,
+                    directoryEntriesCount = report.Arc0WriteTelemetry.DirectoryEntriesCount,
+                    directoryHashesCount = report.Arc0WriteTelemetry.DirectoryHashesCount,
+                    fileEntriesCount = report.Arc0WriteTelemetry.FileEntriesCount,
+                    modifiedArchiveEntriesCount = report.Arc0WriteTelemetry.ModifiedFilesCount
+                },
+                persistedVerification = report.PersistedDiffTelemetry == null ? null : new
+                {
+                    persistedModifiedFilesCount = report.PersistedDiffTelemetry.PersistedModifiedFilesCount,
+                    persistedChangedCharaParamsCount = report.PersistedDiffTelemetry.PersistedChangedCharaParamsCount,
+                    persistedChangedSkillTableEntriesCount = report.PersistedDiffTelemetry.PersistedChangedSkillTableEntriesCount,
+                    persistedChangedStoryTeamsCount = report.PersistedDiffTelemetry.PersistedChangedStoryTeamsCount,
+                    persistedChangedPachangaTeamsCount = report.PersistedDiffTelemetry.PersistedChangedPachangaTeamsCount,
+                    persistedChangedTeamParamsCount = report.PersistedDiffTelemetry.PersistedChangedTeamParamsCount
                 },
                 validation = report.ValidationMessages,
                 exportedFiles = report.ExportedPaths
@@ -170,24 +218,30 @@ namespace IEGORandomizer.Engine.Export
         private static void WriteCitraReadme(string readmePath, string titleId, RandomizationExecutionReport report)
         {
             string shadowAltNote = report.EffectiveEdition == GameEdition.Shadow
-                ? $"Nota para Sombra (EUR): Si tu copia usa el TitleID alternativo {TitleIdCatalog.ShadowEurAltTitleId}, renombra la carpeta '{titleId}' a '{TitleIdCatalog.ShadowEurAltTitleId}'."
+                ? $"Nota para Sombra (EUR): Si al abrir ubicación de mods Citra abre '{TitleIdCatalog.ShadowEurAltTitleId}' en vez de '{titleId}', copia la carpeta 'romfs' dentro de esa carpeta abierta por Citra."
                 : string.Empty;
 
             string text =
-$@"IEGO RANDOMIZER — PAQUETE DE MOD PARA CITRA
-============================================
+$@"IEGO RANDOMIZER v1.0.2 — PAQUETE DE MOD PARA CITRA / AZAHAR / LIME3DS
+=====================================================================
 Semilla (Seed): {report.Seed}
 Huella de verificación: {report.SeedFingerprint}
 Edición: {report.EffectiveEdition}
 Title ID configurado: {titleId}
 
-Cómo cargar en Citra (PC):
-1. Abre Citra en tu PC.
-2. Haz clic derecho sobre Inazuma Eleven GO: Luz / Sombra -> 'Abrir ubicación de mods' (Open Mod Location).
-3. Copia la carpeta 'romfs' ubicada en:
-   load/mods/{titleId}/romfs
-   directamente dentro de la carpeta que abrió Citra.
-4. Inicia el juego normalmente. Tu archivo original del juego NO ha sido modificado.
+Cómo instalar en Citra (PC) SIN ERRORES DE CARPETAS:
+1. Abre Citra y haz clic derecho sobre tu juego (.3ds / .cci / .cia) -> 'Abrir ubicación de mods' (Open Mod Location).
+   Citra abrirá una carpeta terminada en \{titleId}\
+2. Entra aquí en:
+     Citra\load\mods\{titleId}\
+   y copia ÚNICAMENTE la carpeta 'romfs' dentro de la ventana que abrió Citra.
+   Ruta exacta final que debe quedar en tu PC:
+     %APPDATA%\Citra\load\mods\{titleId}\romfs\ie_a.fa
+   (¡NO copies la carpeta 'Citra' entera dentro de '{titleId}', o quedará anidada dos veces y Citra no cargará el mod!)
+3. También puedes pulsar el botón 'Instalar directo en Citra' dentro de IEGO Randomizer para que lo coloque automáticamente.
+4. IMPORTANTE SOBRE PARTIDAS GUARDADAS (.ie):
+   - Los equipos rivales de historia, pachangas 5v5, equipaciones, escudos y cofres cambian de inmediato.
+   - Para ver las nuevas supertécnicas iniciales en los jugadores iniciales del Raimon, inicia 'PARTIDA NUEVA' (los saves existentes guardan en caché las técnicas de los jugadores ya reclutados).
 {shadowAltNote}
 ";
             File.WriteAllText(readmePath, text.Trim() + Environment.NewLine, Encoding.UTF8);
@@ -196,12 +250,12 @@ Cómo cargar en Citra (PC):
         private static void WriteLayeredFsReadme(string readmePath, string titleId, RandomizationExecutionReport report)
         {
             string shadowAltNote = report.EffectiveEdition == GameEdition.Shadow
-                ? $"Nota para Sombra (EUR): Algunas versiones digitales/físicas europeas emplean '{TitleIdCatalog.ShadowEurAltTitleId}' en lugar de '{TitleIdCatalog.ShadowEurTitleId}'."
+                ? $"Nota para Sombra (EUR): Algunas versiones emplean '{TitleIdCatalog.ShadowEurAltTitleId}' en lugar de '{TitleIdCatalog.ShadowEurTitleId}'."
                 : string.Empty;
 
             string text =
-$@"IEGO RANDOMIZER — ESTRUCTURA PREPARADA PARA LAYEREDFS (LUMA3DS)
-================================================================
+$@"IEGO RANDOMIZER v1.0.2 — ESTRUCTURA PREPARADA PARA LAYEREDFS (LUMA3DS)
+======================================================================
 Semilla (Seed): {report.Seed}
 Huella de verificación: {report.SeedFingerprint}
 Edición: {report.EffectiveEdition}

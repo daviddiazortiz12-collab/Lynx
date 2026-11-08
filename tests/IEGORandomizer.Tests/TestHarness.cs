@@ -131,7 +131,10 @@ namespace IEGORandomizer.Tests
                     sw.Stop();
                     failed++;
                     Console.WriteLine($"  [FAIL] {fullName}: {tie.InnerException.Message}");
-                    Console.WriteLine($"         {tie.InnerException.StackTrace?.Split('\n').FirstOrDefault()?.Trim()}");
+                    foreach (string stLine in (tie.InnerException.StackTrace ?? string.Empty).Split('\n').Take(6))
+                    {
+                        Console.WriteLine($"         {stLine.Trim()}");
+                    }
                 }
                 catch (Exception ex)
                 {

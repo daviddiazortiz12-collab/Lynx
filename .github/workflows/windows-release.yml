@@ -118,6 +118,9 @@ jobs:
             $seedResp = Invoke-RestMethod -Uri "http://127.0.0.1:5189/api/seed/random"
             Write-Host "Verified live seed endpoint from standalone Windows .exe: $($seedResp.seed)"
 
+            $citraResp = Invoke-RestMethod -Uri "http://127.0.0.1:5189/api/citra/paths"
+            Write-Host "Verified Windows Citra default mods root: $($citraResp.defaultModsRoot)"
+
             Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:5189/api/app/shutdown" | Out-Null
             Start-Sleep -Seconds 1
           } finally {
@@ -148,16 +151,16 @@ jobs:
 
           Write-Host "Packaged $zipPath ($zipSizeMb MB) - SHA256: $zipHash"
 
-          # Create or update GitHub Release v1.0.1-win64 targeting arena/799dcf14-lynx
-          $tagName = "v1.0.1-win64"
+          # Create or update GitHub Release v1.0.2-win64 targeting arena/799dcf14-lynx
+          $tagName = "v1.0.2-win64"
           $existing = gh release view $tagName 2>$null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tagName $zipPath "release/SHA256SUMS.txt" --clobber
           } else {
             gh release create $tagName $zipPath "release/SHA256SUMS.txt" `
               --target arena/799dcf14-lynx `
-              --title "IEGO Randomizer v1.0.1 (Windows x64 — Ejecutable Independiente, Fix RomFS Real)" `
-              --notes "Versión ejecutable independiente (self-contained) v1.0.1 para Windows 10/11 (64 bits). Corrige de raíz el parseo de identificadores polimórficos Level-5 en mapas, rutas de partidos ('scr_br_0005_s'), tiendas y CHARA_BASE en RomFS reales de Inazuma Eleven GO: Luz y Sombra. Descarga **IEGORandomizer-Windows-x64.zip**, extráelo en cualquier carpeta y haz doble clic en **IEGORandomizer.exe** (no requiere instalar .NET)."
+              --title "IEGO Randomizer v1.0.2 (Windows x64 — Persistencia ARC0 Retail, Equipos/Pachangas/Equipaciones y Citra Directo)" `
+              --notes "Versión ejecutable independiente (self-contained) v1.0.2 para Windows 10/11 (64 bits). Corrige todas las causas por las que los cambios no se reflejaban en Citra: preservación binaria del layout retail ARC0 (LZ10/NoCompression y DirectoryHashes N-1), sincronización real en disco de todos los archivos internos, desbloqueo de todos los equipos rivales de historia y pachangas 5v5 (sin sobreproteger por VictoryCondition/Script/btlXXXX), mapeo correcto de equipaciones iiuXXXX/uza/uzb/uzc/uzd y ChasePlayer en mapa, exclusión de manuales dummy wh*9999, detección de Sombra CTR-P-AEDP, modo Diagnóstico Local sin spoilers e botón de Instalación Directa en Citra."
           }
 
           # Restore NuGet.Config before committing release artifacts
@@ -167,5 +170,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f release/IEGORandomizer-Windows-x64.zip release/SHA256SUMS.txt
-          git commit -m "chore(release): update Windows x64 self-contained package v1.0.1 [skip ci]"
+          git commit -m "chore(release): update Windows x64 self-contained package v1.0.2 [skip ci]"
           git push origin HEAD:arena/799dcf14-lynx

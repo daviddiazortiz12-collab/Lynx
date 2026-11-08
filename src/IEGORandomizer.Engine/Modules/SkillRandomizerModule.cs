@@ -51,6 +51,16 @@ namespace IEGORandomizer.Engine.Modules
                 .GroupBy(s => s.SkillHash)
                 .ToDictionary(g => g.Key, g => g.First());
 
+            // Exclude Ultimate Evolution Manual dummy rows (whs9999, who9999, whd9999, whk9999)
+            // which appear in retail skill_config.cfg.bin with SkillPosition 1..4, Power = 0, TPCost = 1.
+            var dummyManualHashes = new HashSet<int>
+            {
+                Level5IdHelper.ComputeCrc32Utf8("whs9999"),
+                Level5IdHelper.ComputeCrc32Utf8("who9999"),
+                Level5IdHelper.ComputeCrc32Utf8("whd9999"),
+                Level5IdHelper.ComputeCrc32Utf8("whk9999")
+            };
+
             // 1. Optional Skill Parameter Randomization (TPCost, Power, Element)
             if (options.RandomizeSkillParameters)
             {
@@ -59,11 +69,11 @@ namespace IEGORandomizer.Engine.Modules
 
                 foreach (var sk in skills)
                 {
-                    if (sk.SkillHash == 0)
+                    if (sk.SkillHash == 0 || dummyManualHashes.Contains(sk.SkillHash))
                         continue;
 
-                    // SkillPosition 5 = Passive Skill/Talent (TPCost = 0, Power = 0)
-                    if (sk.SkillPosition == 5 || sk.TPCost == 0)
+                    // SkillPosition 5 = Passive Skill/Talent (TPCost = 0, Power = 0); skip dummy 0-power active rows
+                    if (sk.SkillPosition == 5 || sk.TPCost <= 1 || sk.Power <= 0)
                         continue;
 
                     if (sk.Element >= 1 && sk.Element <= 4)
@@ -88,14 +98,16 @@ namespace IEGORandomizer.Engine.Modules
 
             // Build categorized player-usable skill pools (MovePositions.json: 1=Save, 2=Shot, 3=Dribble, 4=Block, 5=Talent)
             var playerMoves = skills
-                .Where(s => s.SkillHash != 0 && !avatarMoveHashes.Contains(s.SkillHash))
+                .Where(s => s.SkillHash != 0 &&
+                            !avatarMoveHashes.Contains(s.SkillHash) &&
+                            !dummyManualHashes.Contains(s.SkillHash))
                 .ToList();
 
-            var saveMoves = playerMoves.Where(s => s.SkillPosition == 1).ToList();
-            var shotMoves = playerMoves.Where(s => s.SkillPosition == 2).ToList();
-            var dribbleMoves = playerMoves.Where(s => s.SkillPosition == 3).ToList();
-            var blockMoves = playerMoves.Where(s => s.SkillPosition == 4).ToList();
-            var activeFieldMoves = playerMoves.Where(s => s.SkillPosition >= 1 && s.SkillPosition <= 4).ToList();
+            var saveMoves = playerMoves.Where(s => s.SkillPosition == 1 && s.Power > 0 && s.TPCost > 1).ToList();
+            var shotMoves = playerMoves.Where(s => s.SkillPosition == 2 && s.Power > 0 && s.TPCost > 1).ToList();
+            var dribbleMoves = playerMoves.Where(s => s.SkillPosition == 3 && s.Power > 0 && s.TPCost > 1).ToList();
+            var blockMoves = playerMoves.Where(s => s.SkillPosition == 4 && s.Power > 0 && s.TPCost > 1).ToList();
+            var activeFieldMoves = playerMoves.Where(s => s.SkillPosition >= 1 && s.SkillPosition <= 4 && s.Power > 0 && s.TPCost > 1).ToList();
             var talentMoves = playerMoves.Where(s => s.SkillPosition == 5).ToList();
 
             // 2. Player Initial Skills, Level-Up Learnsets, and Talents
@@ -209,7 +221,10 @@ namespace IEGORandomizer.Engine.Modules
                 DeterministicRng avSkillRng = seeds.GetSubsystem("skills.avatars");
 
                 var avatarActivePool = skills
-                    .Where(s => avatarMoveHashes.Contains(s.SkillHash) && s.SkillPosition >= 1 && s.SkillPosition <= 4)
+                    .Where(s => avatarMoveHashes.Contains(s.SkillHash) &&
+                                !dummyManualHashes.Contains(s.SkillHash) &&
+                                s.SkillPosition >= 1 && s.SkillPosition <= 4 &&
+                                s.Power > 0)
                     .ToList();
 
                 var avatarPassivePool = avatars

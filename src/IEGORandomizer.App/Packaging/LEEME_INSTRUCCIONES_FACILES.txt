@@ -1,5 +1,5 @@
 ========================================================================
-  IEGO RANDOMIZER v1.0.1 — GUIA RAPIDA PARA WINDOWS (SIN PROGRAMACION)
+  IEGO RANDOMIZER v1.0.2 — GUIA RAPIDA PARA WINDOWS (SIN PROGRAMACION)
   Para Inazuma Eleven GO: Luz y Sombra
 ========================================================================
 
@@ -23,46 +23,43 @@ PASO 1: ABRIR EL PROGRAMA
 PASO 2: CARGAR TU JUEGO (RomFS, ie_a.fa o .3ds desencriptado)
 ------------------------------------------------------------------------
 En la seccion "1. Archivos del Juego y Destino":
-- Si tienes una carpeta RomFS extraida: pulsa "Carpeta..." y elige la
-  carpeta donde esta tu RomFS (la que contiene ie_a.fa).
+- Si tienes una carpeta RomFS extraida (por ejemplo "ie luz romFS"):
+  pulsa "Carpeta..." y elige esa carpeta que contiene ie_a.fa.
 - Si tienes el archivo ie_a.fa suelto o una ROM .3ds desencriptada de
   Citra: pulsa "Archivo..." y seleccionalo.
-- Veras un cartel verde confirmando que el archivo es valido y que el
-  original esta protegido en modo solo lectura.
 - En "Edicion del juego", elige "Inazuma Eleven GO: Luz" o
   "Inazuma Eleven GO: Sombra".
 - En "Carpeta de salida", pulsa "Elegir carpeta..." y crea o selecciona
-  una carpeta NUEVA y vacia (por ejemplo, "Mi_Partida_Random_01").
+  una carpeta NUEVA (por ejemplo, "Mi_Partida_Random_01").
+- OPCIONAL RECOMENDADO: Pulsa "Diagnosticar Archivos y Mod en Citra"
+  para comprobar tus archivos reales y detectar al instante cualquier
+  carpeta mal colocada en Citra.
 
 ------------------------------------------------------------------------
-PASO 3: ELEGIR SEMILLA (SEED) Y OPCIONES
+PASO 3: ACTIVAR INSTALACION DIRECTA EN CITRA Y GENERAR
 ------------------------------------------------------------------------
-En "2. Semilla (Seed) y Modo a Ciegas":
-- Puedes dejar la semilla aleatoria que aparece, pulsar el boton
-  "Aleatoria" para generar otra, o escribir la misma semilla que un
-  amigo para jugar exactamente la misma partida.
-- Deja activado "Modo Partida a Ciegas (Sin Spoilers)" si quieres
-  descubrir todo jugando sin ver listas de cambios.
-- Puedes usar los botones rapidos ("Equilibrado Recomendado" o
-  "Randomizacion Completa Segura") o marcar/desmarcar a tu gusto las
-  casillas de Jugadores, Supertecnicas, Equipos, Cofres y Equipaciones.
+1. En "3. Formatos de Exportacion", deja marcada la casilla:
+     "Instalar directo en Citra / Azahar al terminar"
+   (El programa detecta solo tu carpeta %APPDATA%\Citra\load\mods y
+   copia romfs\ie_a.fa exactamente donde Citra lo necesita, sin errores
+   de carpetas dobles).
+2. Pulsa el boton naranja "Generar Run Randomizada" y espera al 100%.
+   (Tambien puedes pulsar el boton "Instalar directo en Citra" que sale
+   en el cuadro verde al terminar).
 
 ------------------------------------------------------------------------
-PASO 4: GENERAR Y JUGAR EN CITRA
+PASO 4: JUGAR EN CITRA (MUY IMPORTANTE)
 ------------------------------------------------------------------------
-1. Pulsa el boton naranja "Generar Run Randomizada" y espera a que la
-   barra llegue al 100%.
-2. Cuando aparezca el recuadro verde de exito, pulsa "Abrir carpeta de
-   salida".
-3. Para jugar en Citra:
-   - Abre Citra en tu PC.
-   - Haz clic derecho sobre Inazuma Eleven GO: Luz o Sombra y elige
-     "Abrir ubicacion de mods" (Open Mod Location).
-   - Entra en la carpeta generada:
-       Citra\load\mods\<TitleID>\
-     y copia la carpeta "romfs" dentro de la ventana que abrio Citra.
-   - Inicia el juego en Citra normalmente y disfruta tu partida!
-     (Nota para Sombra EUR: si al abrir el juego no ves cambios, entra en
-     LEEME_CITRA.txt para ver si tu version usa el TitleID alternativo
-     000400000017C200).
+1. Si abres el juego en Citra desde un archivo .3ds / .cci / .cia, Citra
+   lee automaticamente el mod desde:
+     %APPDATA%\Citra\load\mods\0004000000112F00\romfs\ie_a.fa  (Luz)
+     %APPDATA%\Citra\load\mods\0004000000113000\romfs\ie_a.fa  (Sombra)
+   (NOTA: Si haces copia manual, dentro de la carpeta del TitleID debe
+   estar directamente la carpeta "romfs", NUNCA otra carpeta "Citra"!).
+2. SOBRE TU PARTIDA GUARDADA (.ie):
+   - Los equipos rivales de historia, pachangas 5v5, equipaciones,
+     escudos, entrenadores, formaciones y cofres cambian de inmediato.
+   - Para ver las nuevas supertecnicas iniciales en los jugadores ya
+     reclutados del Raimon, inicia "PARTIDA NUEVA" (las partidas ya
+     guardadas almacenan en el save las tecnicas actuales del equipo).
 ========================================================================

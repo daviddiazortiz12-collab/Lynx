@@ -141,16 +141,16 @@ namespace IEGORandomizer.Engine
                     string.Join("\n- ", inMemoryCheck.Errors));
             }
 
-            ReportStep(progress, 92, "Exportando paquetes (Standalone / Citra / LayeredFS) en carpeta de salida...");
-            ModPackageExporter.Export(
+            ReportStep(progress, 90, "Exportando paquetes (Standalone / Citra / LayeredFS) preservando layout retail ARC0...");
+            ModPackageExporter.ExportArchives(
                 workspace.Game,
                 workspace.OriginalInputPath,
                 outputDirectory,
                 options,
                 report,
-                new Progress<int>(p => ReportStep(progress, 92 + (p * 5 / 100), $"Escribiendo archivo ARC0 ({p}%)...")));
+                new Progress<int>(p => ReportStep(progress, 90 + (p * 5 / 100), $"Escribiendo archivo ARC0 ({p}%)...")));
 
-            ReportStep(progress, 98, "Reabriendo archivo exportado y verificando inmutabilidad del archivo original...");
+            ReportStep(progress, 96, "Reabriendo archivo exportado, verificando persistencia binaria y comprobando SHA-256 original...");
             string exportedFa = report.ExportedPaths.FirstOrDefault(p => p.EndsWith("ie_a.fa", StringComparison.OrdinalIgnoreCase));
             if (exportedFa == null || !File.Exists(exportedFa))
             {
@@ -167,9 +167,21 @@ namespace IEGORandomizer.Engine
                         string.Join("\n- ", diskCheck.Errors));
                 }
 
-                report.OutputIntegrityVerified = true;
                 report.ValidationMessages.AddRange(diskCheck.ChecksPassed);
             }
+
+            report.PersistedDiffTelemetry = PostSaveArchiveVerifier.VerifyPersistedMutations(
+                workspace.ActiveIeAFaPath,
+                exportedFa,
+                options.PreferredLanguageCode,
+                report);
+
+            report.OutputIntegrityVerified = true;
+            report.ValidationMessages.Add(
+                $"Persistencia binaria ARC0 verificada en disco: {report.PersistedDiffTelemetry.PersistedModifiedFilesCount} archivos internos modificados " +
+                $"(jugadores={report.PersistedDiffTelemetry.PersistedChangedCharaParamsCount}, técnicas={report.PersistedDiffTelemetry.PersistedChangedSkillTableEntriesCount}, " +
+                $"equipos={report.PersistedDiffTelemetry.PersistedChangedStoryTeamsCount + report.PersistedDiffTelemetry.PersistedChangedPachangaTeamsCount}, " +
+                $"equipaciones/params={report.PersistedDiffTelemetry.PersistedChangedTeamParamsCount}).");
 
             report.SourceImmutabilityVerified = workspace.VerifySourceUnchanged();
             if (!report.SourceImmutabilityVerified)
@@ -178,6 +190,8 @@ namespace IEGORandomizer.Engine
                     "ERROR CRÍTICO: La verificación SHA-256 del archivo original no coincidió.");
             }
             report.ValidationMessages.Add("Archivo original verificado intacto byte a byte (SHA-256 idéntico).");
+
+            ModPackageExporter.WriteManifestAndLogs(outputDirectory, options, report);
 
             ReportStep(progress, 100, "Generación completada con éxito.");
             return report;
