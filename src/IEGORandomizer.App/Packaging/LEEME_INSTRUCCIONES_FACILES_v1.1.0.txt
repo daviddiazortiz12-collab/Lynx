@@ -45,25 +45,35 @@ MODO 2: .CIA ORIGINAL + CARPETA ROMFS MODIFICADA -> NUEVO .CIA
    "Fusionar Carpeta RomFS + .cia y Verificar Nuevo .cia".
 
 ------------------------------------------------------------------------
-PASO A NINTENDO 2DS / 3DS REAL (CON LUMA3DS + FBI)
+COMO ACTUALIZAR EN TU NINTENDO 2DS / 3DS CON FBI SIN PERDER TU PARTIDA
 ------------------------------------------------------------------------
-1. Copia el nuevo archivo "..._Randomizado.cia" generado a la carpeta
-   "/cias/" de la tarjeta SD de tu Nintendo 2DS / 3DS (formato FAT32).
-   (Asegurate de tener espacio libre en la SD para copiar e instalar).
-2. IMPORTANTE SI YA TENIAS PARTIDA GUARDADA DEL JUEGO ORIGINAL EN LA 2DS:
-   - Al instalar un .cia del mismo TitleID en FBI, FBI reemplaza la
-     instalacion anterior. Si tenias una partida antigua que quieras
-     guardar de recuerdo, haz antes un backup en "Checkpoint".
-3. En tu Nintendo 2DS / 3DS, abre "FBI" -> "SD" -> "cias" -> selecciona
-   tu "..._Randomizado.cia" -> pulsa "Install CIA" (o "Install and
-   delete CIA" si tienes poco espacio libre en la SD).
-4. Vuelve al Menu HOME, abre el regalo de "Inazuma Eleven GO: Luz" (o
-   Sombra) e inicia **PARTIDA NUEVA** para que todos los jugadores,
-   supertecnicas iniciales del Raimon, rivales, pachangas, cofres y
-   equipaciones randomizadas funcionen desde el primer minuto.
-5. NOTA SOBRE LAYEREDFS EN 2DS: Si alguna vez pusiste archivos antiguos
-   en "sd:/luma/titles/0004000000112F00/romfs/", borra esa carpeta de la
-   SD para que Luma3DS no pise el nuevo .cia con archivos viejos.
+1. Deja activada la casilla "Modo Actualizacion FBI en 2DS/3DS (V.1.1.2)"
+   (viene activada por defecto).
+   - Esto mantiene el mismo TitleID base (0004000000112F00 para Luz,
+     0004000000113000 para Sombra) y el mismo SaveDataSize (512 KB),
+     pero sube la version TMD a "V.1.1.2" (1042) para que FBI detecte
+     el .cia como una actualizacion mas reciente del juego instalado.
+2. IMPORTANTE: NO desinstales ni borres el juego anterior desde Ajustes
+   de la consola ni desde FBI (borrar un titulo borra tambien su save).
+   Si quieres seguridad extra, haz copia en 5 segundos con "Checkpoint".
+3. Copia el nuevo "..._Randomizado.cia" a "/cias/" en tu tarjeta SD.
+4. En tu Nintendo 2DS, abre "FBI" -> "SD" -> "cias" -> selecciona el
+   nuevo .cia (veras "Version: 1.1.2 (1042)") -> pulsa "Install CIA"
+   (o "Install and delete CIA") y confirma sobrescribir.
+   - El sistema Horizon OS de la 2DS reemplaza UNICAMENTE la carpeta
+     "content/" (.app/.tmd) y deja intacta tu partida guardada
+     ("data/00000001.sav")!
+5. Si habias guardado antes de entrar en la primera pachanga, puedes
+   cargar tu partida directamente y jugar la pachanga sin cuelgues!
+   (Nota: si reclutaste jugadores antes del parche y quieres que sus
+   supertecnicas iniciales ya guardadas en el .sav tambien se regeneren
+   con los roles corregidos de v1.1.2, puedes iniciar Partida Nueva).
+6. NOTA SOBRE LAYEREDFS EN 2DS: Si usas el .cia completo, asegurate de
+   no tener un "ie_a.fa" antiguo olvidado en
+   "sd:/luma/titles/0004000000112F00/romfs/", porque Luma3DS prioriza
+   esa carpeta sobre el .cia instalado. (Opcionalmente, puedes marcar
+   "Exportar tambien parche rapido Luma3DS" y copiar solo ese ie_a.fa
+   nuevo a esa ruta con "Enable game patching" activo en Luma3DS).
 
 ------------------------------------------------------------------------
 EMULADORES (CITRA / AZAHAR / LIME3DS) Y MODO CLASICO v1.0.2

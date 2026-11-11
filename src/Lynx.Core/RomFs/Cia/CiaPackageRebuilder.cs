@@ -23,7 +23,8 @@ namespace Lynx.Core.RomFs.Cia
             string outputCiaPath,
             CtrKeyStore keyStore = null,
             Action<int, string> onProgress = null,
-            string precomputedSourceSha256 = null)
+            string precomputedSourceSha256 = null,
+            CiaBuildOptions buildOptions = null)
         {
             if (string.IsNullOrWhiteSpace(modifiedRomFsDirectory))
                 throw new ArgumentException("Ruta de carpeta RomFS modificada vacía.", nameof(modifiedRomFsDirectory));
@@ -71,7 +72,8 @@ namespace Lynx.Core.RomFs.Cia
                 outputCiaPath,
                 keyStore,
                 onProgress,
-                precomputedSourceSha256);
+                precomputedSourceSha256,
+                buildOptions);
         }
 
         public static (CiaRebuildTelemetry Telemetry, CiaVerificationResult Verification) RebuildWithFileOverlays(
@@ -81,7 +83,8 @@ namespace Lynx.Core.RomFs.Cia
             string outputCiaPath,
             CtrKeyStore keyStore = null,
             Action<int, string> onProgress = null,
-            string precomputedSourceSha256 = null)
+            string precomputedSourceSha256 = null,
+            CiaBuildOptions buildOptions = null)
         {
             if (string.IsNullOrWhiteSpace(sourceCiaPath))
                 throw new ArgumentException("Ruta del .cia original vacía.", nameof(sourceCiaPath));
@@ -163,6 +166,14 @@ namespace Lynx.Core.RomFs.Cia
                     {
                         throw new InvalidDataException("No se pudo reconstruir el TMD del .cia.");
                     }
+
+                    // Resolve effective TMD TitleVersion (default bumps V.0.0.0 -> V.1.1.2 [1042] or source + 1
+                    // so FBI updates content/ in-place on Nintendo 2DS/3DS without deleting data/00000001.sav).
+                    ushort effectiveTitleVersionRaw = CiaConstants.ResolveEffectiveTitleVersion(
+                        inspection.TmdTitleVersionRaw,
+                        buildOptions);
+                    string effectiveTitleVersionFormatted = CiaConstants.FormatTitleVersion(effectiveTitleVersionRaw);
+                    BinaryPrimitives.WriteUInt16BigEndian(newTmd.AsSpan(tmdBodyOff + 0x9C, 2), effectiveTitleVersionRaw);
 
                     long certOff = inspection.CertChainOffset;
                     long tikOff = inspection.TicketOffset;
@@ -434,7 +445,8 @@ namespace Lynx.Core.RomFs.Cia
                         expectedTitleIdHex: inspection.TmdTitleIdHex,
                         expectedSaveDataSize: inspection.SaveDataSizeBytes,
                         minimumExpectedRomFsFileCount: inspection.RomFsFileCount,
-                        expectedOverlayFileSizes: expectedOverlaySizes);
+                        expectedOverlayFileSizes: expectedOverlaySizes,
+                        expectedTitleVersionRaw: effectiveTitleVersionRaw);
 
                     if (!verification.IsValid)
                     {
@@ -467,7 +479,11 @@ namespace Lynx.Core.RomFs.Cia
                         SourceCiaSha256Hex = sourcePostSha256,
                         OutputCiaSha256Hex = outputSha256,
                         TitleIdHex = inspection.TmdTitleIdHex,
-                        TitleVersionFormatted = inspection.TmdTitleVersionFormatted,
+                        SourceTitleVersionRaw = inspection.TmdTitleVersionRaw,
+                        SourceTitleVersionFormatted = inspection.TmdTitleVersionFormatted,
+                        TitleVersionRaw = effectiveTitleVersionRaw,
+                        TitleVersionFormatted = effectiveTitleVersionFormatted,
+                        IsFbiInPlaceUpdateReady = effectiveTitleVersionRaw > inspection.TmdTitleVersionRaw,
                         PreservedSaveDataSizeBytes = inspection.SaveDataSizeBytes,
                         PreservedContentsCount = verification.VerifiedContentChunksCount,
                         SourceRomFsFileCount = sourceRomFsFileCount,

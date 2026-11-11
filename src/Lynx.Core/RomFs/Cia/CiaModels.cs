@@ -77,6 +77,108 @@ namespace Lynx.Core.RomFs.Cia
             int micro = rawVersion & 0x0F;
             return $"V.{major}.{minor}.{micro}";
         }
+
+        /// <summary>
+        /// Default FBI in-place update revision (V.1.1.2 = (1 &lt;&lt; 10) | (1 &lt;&lt; 4) | 2 = 1042 = 0x0412).
+        /// Installing a .cia with the same base TitleID (e.g. 0004000000112F00) and a higher TMD TitleVersion
+        /// in FBI updates title/00040000/&lt;TitleID_Low&gt;/content/ in place without deleting data/00000001.sav.
+        /// </summary>
+        public const ushort DefaultFbiUpdateTitleVersionRaw = (1 << 10) | (1 << 4) | 2; // 1042 (V.1.1.2)
+
+        public static ushort EncodeTitleVersion(int major, int minor, int micro)
+        {
+            if (major < 0 || major > 63)
+                throw new ArgumentOutOfRangeException(nameof(major), "El número mayor de versión 3DS debe estar entre 0 y 63.");
+            if (minor < 0 || minor > 63)
+                throw new ArgumentOutOfRangeException(nameof(minor), "El número menor de versión 3DS debe estar entre 0 y 63.");
+            if (micro < 0 || micro > 15)
+                throw new ArgumentOutOfRangeException(nameof(micro), "El número micro de versión 3DS debe estar entre 0 y 15.");
+
+            return (ushort)((major << 10) | (minor << 4) | micro);
+        }
+
+        public static bool TryParseTitleVersionString(string text, out ushort rawVersion)
+        {
+            rawVersion = 0;
+            if (string.IsNullOrWhiteSpace(text))
+                return false;
+
+            string trimmed = text.Trim();
+            if (trimmed.StartsWith("V.", StringComparison.OrdinalIgnoreCase))
+                trimmed = trimmed.Substring(2).Trim();
+            else if (trimmed.StartsWith("v", StringComparison.OrdinalIgnoreCase) && trimmed.Contains('.'))
+                trimmed = trimmed.Substring(1).Trim();
+
+            if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            {
+                return ushort.TryParse(
+                    trimmed.Substring(2),
+                    System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out rawVersion);
+            }
+
+            if (trimmed.Contains('.'))
+            {
+                string[] parts = trimmed.Split('.');
+                if (parts.Length < 2 || parts.Length > 3)
+                    return false;
+                if (!int.TryParse(parts[0], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int maj) ||
+                    !int.TryParse(parts[1], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int min))
+                {
+                    return false;
+                }
+
+                int mic = 0;
+                if (parts.Length == 3 &&
+                    !int.TryParse(parts[2], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out mic))
+                {
+                    return false;
+                }
+
+                if (maj < 0 || maj > 63 || min < 0 || min > 63 || mic < 0 || mic > 15)
+                    return false;
+
+                rawVersion = EncodeTitleVersion(maj, min, mic);
+                return true;
+            }
+
+            return ushort.TryParse(trimmed, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out rawVersion);
+        }
+
+        public static ushort ResolveEffectiveTitleVersion(ushort sourceTitleVersionRaw, CiaBuildOptions buildOptions)
+        {
+            if (buildOptions == null || buildOptions.BumpVersionForFbiUpdate)
+            {
+                if (buildOptions?.TargetTitleVersionRaw is ushort explicitVer)
+                    return explicitVer;
+
+                if (sourceTitleVersionRaw < DefaultFbiUpdateTitleVersionRaw)
+                    return DefaultFbiUpdateTitleVersionRaw;
+
+                return sourceTitleVersionRaw < ushort.MaxValue
+                    ? (ushort)(sourceTitleVersionRaw + 1)
+                    : ushort.MaxValue;
+            }
+
+            return buildOptions.TargetTitleVersionRaw ?? sourceTitleVersionRaw;
+        }
+    }
+
+    public sealed class CiaBuildOptions
+    {
+        /// <summary>
+        /// When true (default), bumps TMD TitleVersion above the source .cia (e.g. V.0.0.0 -&gt; V.1.1.2 [1042],
+        /// or sourceVersion + 1 if already &gt;= V.1.1.2) while preserving the base TitleID and SaveDataSize so
+        /// FBI installs the updated .cia cleanly over an existing installation on Nintendo 2DS/3DS without
+        /// deleting data/00000001.sav.
+        /// </summary>
+        public bool BumpVersionForFbiUpdate { get; set; } = true;
+
+        /// <summary>
+        /// Optional explicit 16-bit TMD TitleVersion override (encoded as (major &lt;&lt; 10) | (minor &lt;&lt; 4) | micro).
+        /// </summary>
+        public ushort? TargetTitleVersionRaw { get; set; }
     }
 
     public sealed class CiaTmdChunkInfo
@@ -205,7 +307,11 @@ namespace Lynx.Core.RomFs.Cia
         public string SourceCiaSha256Hex { get; init; } = string.Empty;
         public string OutputCiaSha256Hex { get; init; } = string.Empty;
         public string TitleIdHex { get; init; } = string.Empty;
+        public ushort SourceTitleVersionRaw { get; init; }
+        public string SourceTitleVersionFormatted { get; init; } = string.Empty;
+        public ushort TitleVersionRaw { get; init; }
         public string TitleVersionFormatted { get; init; } = string.Empty;
+        public bool IsFbiInPlaceUpdateReady { get; init; }
         public uint PreservedSaveDataSizeBytes { get; init; }
         public int PreservedContentsCount { get; init; }
         public int SourceRomFsFileCount { get; init; }

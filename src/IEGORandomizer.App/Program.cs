@@ -100,7 +100,7 @@ app.MapGet("/app.js", () => ServeEmbeddedOrPhysicalAsset(resolvedWwwroot, "app.j
 app.MapGet("/api/health", () => Results.Ok(new
 {
     status = "ok",
-    version = "1.1.1",
+    version = "1.1.2",
     preservedBaseline = "1.0.2",
     app = "IEGO Randomizer (Inazuma Eleven GO: Luz y Sombra — Nintendo 2DS/3DS & PC)",
     platform = Environment.OSVersion.Platform.ToString()
@@ -409,7 +409,7 @@ app.Lifetime.ApplicationStarted.Register(() =>
 {
     string localUrl = $"http://127.0.0.1:{port}";
     Console.WriteLine("================================================================");
-    Console.WriteLine("  IEGO RANDOMIZER v1.1.1 — Inazuma Eleven GO: Luz y Sombra (2DS/3DS & PC)");
+    Console.WriteLine("  IEGO RANDOMIZER v1.1.2 — Inazuma Eleven GO: Luz y Sombra (2DS/3DS & PC)");
     Console.WriteLine("================================================================");
     Console.WriteLine($"  Interfaz activa en : {localUrl}");
     Console.WriteLine("  Estado             : Listo (Mantén esta ventana abierta mientras usas el programa)");

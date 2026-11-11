@@ -41,6 +41,7 @@ namespace IEGORandomizer.App.Services
         public string ModifiedRomFsDirectory { get; set; } = string.Empty;
         public string OutputCiaPath { get; set; } = string.Empty;
         public string AesKeysPath { get; set; } = string.Empty;
+        public CiaPackageOptions Cia { get; set; } = new();
     }
 
     /// <summary>
@@ -175,7 +176,8 @@ namespace IEGORandomizer.App.Services
                         request.ModifiedRomFsDirectory,
                         request.OutputCiaPath,
                         request.AesKeysPath,
-                        progress);
+                        progress,
+                        request.Cia);
 
                     state.MergeReport = mergeReport;
                     state.Percent = 100;

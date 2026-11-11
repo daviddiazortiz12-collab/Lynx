@@ -94,6 +94,22 @@ namespace IEGORandomizer.App
                             options.Export.DirectCitraModsRootPath = LocalDiagnosticService.ResolveDefaultCitraModsRoot();
                         }
                         break;
+                    case "--fbi-update":
+                        options.Cia.BumpTitleVersionForFbiUpdate = true;
+                        break;
+                    case "--keep-cia-version":
+                        options.Cia.BumpTitleVersionForFbiUpdate = false;
+                        break;
+                    case "--cia-version":
+                        if (i + 1 < args.Length)
+                        {
+                            options.Cia.BumpTitleVersionForFbiUpdate = true;
+                            options.Cia.CustomTitleVersionOverride = args[++i];
+                        }
+                        break;
+                    case "--companion-luma":
+                        options.Cia.ExportCompanionLuma3dsPatch = true;
+                        break;
                     case "--no-blind":
                         options.BlindPlayMode = false;
                         break;
@@ -120,7 +136,7 @@ namespace IEGORandomizer.App
             if (!string.IsNullOrWhiteSpace(mergeSourceCiaPath))
             {
                 string targetMergeCia = !string.IsNullOrWhiteSpace(outputCiaPath) ? outputCiaPath : outputDir;
-                return RunMergeCiaCli(mergeSourceCiaPath, mergeRomFsDir, targetMergeCia, options.AesKeysPath);
+                return RunMergeCiaCli(mergeSourceCiaPath, mergeRomFsDir, targetMergeCia, options.AesKeysPath, options.Cia);
             }
 
             if (!string.IsNullOrWhiteSpace(configJsonPath) && File.Exists(configJsonPath))
@@ -365,7 +381,8 @@ namespace IEGORandomizer.App
                 Console.WriteLine();
                 Console.WriteLine("Nuevo archivo .cia generado y verificado en frío:");
                 Console.WriteLine($"  Semilla (Seed)          : {report.Seed} (Huella: {report.SeedFingerprint})");
-                Console.WriteLine($"  Edición / Title ID      : {report.EffectiveEdition} ({t.TitleIdHex} | {t.TitleVersionFormatted})");
+                Console.WriteLine($"  Edición / Title ID      : {report.EffectiveEdition} ({t.TitleIdHex} | {t.SourceTitleVersionFormatted} -> {t.TitleVersionFormatted})");
+                Console.WriteLine($"  Actualización FBI 2DS   : {(t.IsFbiInPlaceUpdateReady ? "LISTA (Sobrescribe juego sin borrar partida 00000001.sav)" : $"Versión preservada ({t.TitleVersionFormatted})")}");
                 Console.WriteLine($"  Original sin modificar  : SÍ (SHA-256 idéntico: {t.SourceCiaSha256Hex})");
                 Console.WriteLine($"  Nuevo .cia generado     : {t.OutputCiaPath} ({t.OutputCiaSizeBytes:N0} B)");
                 Console.WriteLine($"  SHA-256 nuevo .cia      : {t.OutputCiaSha256Hex}");
@@ -381,7 +398,7 @@ namespace IEGORandomizer.App
             }
         }
 
-        private static int RunMergeCiaCli(string sourceCiaPath, string modRomFsDir, string outputCiaPath, string aesKeysPath)
+        private static int RunMergeCiaCli(string sourceCiaPath, string modRomFsDir, string outputCiaPath, string aesKeysPath, CiaPackageOptions ciaOptions)
         {
             if (string.IsNullOrWhiteSpace(sourceCiaPath) || string.IsNullOrWhiteSpace(modRomFsDir) || string.IsNullOrWhiteSpace(outputCiaPath))
             {
@@ -392,7 +409,7 @@ namespace IEGORandomizer.App
             try
             {
                 Console.WriteLine("================================================================");
-                Console.WriteLine("  IEGO RANDOMIZER v1.1.1 — MODO 2 (.CIA + ROMFS -> NUEVO .CIA)");
+                Console.WriteLine("  IEGO RANDOMIZER v1.1.2 — MODO 2 (.CIA + ROMFS -> NUEVO .CIA)");
                 Console.WriteLine("================================================================");
 
                 var svc = new CiaWorkflowService();
@@ -406,7 +423,7 @@ namespace IEGORandomizer.App
                     }
                 });
 
-                var res = svc.MergeModifiedRomFsIntoCia(sourceCiaPath, modRomFsDir, outputCiaPath, aesKeysPath, progress);
+                var res = svc.MergeModifiedRomFsIntoCia(sourceCiaPath, modRomFsDir, outputCiaPath, aesKeysPath, progress, ciaOptions);
                 var t = res.RebuildTelemetry;
                 var v = res.Verification;
 

@@ -30,6 +30,7 @@ namespace IEGORandomizer.Engine.Configuration
         public UniformsRandomizerOptions Uniforms { get; set; } = new();
         public ProtectionRandomizerOptions Protection { get; set; } = new();
         public ExportRandomizerOptions Export { get; set; } = new();
+        public CiaPackageOptions Cia { get; set; } = new();
     }
 
     public sealed class PlayersRandomizerOptions
@@ -110,5 +111,26 @@ namespace IEGORandomizer.Engine.Configuration
         public bool ExportLuma3dsLayeredFsStructure { get; set; } = true;
         public string CustomTitleIdOverride { get; set; } = string.Empty;
         public string DirectCitraModsRootPath { get; set; } = string.Empty;
+    }
+
+    public sealed class CiaPackageOptions
+    {
+        /// <summary>
+        /// When enabled (default), bumps the TMD TitleVersion above the source .cia (e.g. V.0.0.0 -&gt; V.1.1.2)
+        /// while keeping the base TitleID and SaveDataSize identical so FBI updates the game in-place on
+        /// Nintendo 2DS/3DS without deleting existing save data (00000001.sav).
+        /// </summary>
+        public bool BumpTitleVersionForFbiUpdate { get; set; } = true;
+
+        /// <summary>
+        /// Optional explicit target TitleVersion string (e.g. "1.1.2", "1.2.0", "1042", "0x0412").
+        /// </summary>
+        public string CustomTitleVersionOverride { get; set; } = string.Empty;
+
+        /// <summary>
+        /// When enabled during .cia generation, also writes the companion Luma3DS LayeredFS file
+        /// (&lt;outputFolder&gt;/Luma3DS/titles/&lt;TitleID&gt;/romfs/ie_a.fa) for fast SD patching without reinstalling the 3 GB .cia.
+        /// </summary>
+        public bool ExportCompanionLuma3dsPatch { get; set; } = false;
     }
 }

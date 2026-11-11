@@ -22,7 +22,8 @@ namespace Lynx.Core.RomFs.Cia
             string expectedTitleIdHex = null,
             uint? expectedSaveDataSize = null,
             int? minimumExpectedRomFsFileCount = null,
-            IReadOnlyDictionary<string, long> expectedOverlayFileSizes = null)
+            IReadOnlyDictionary<string, long> expectedOverlayFileSizes = null,
+            ushort? expectedTitleVersionRaw = null)
         {
             var result = new CiaVerificationResult();
 
@@ -81,7 +82,14 @@ namespace Lynx.Core.RomFs.Cia
                         $"Inconsistencia de TitleID entre Ticket ({report.TicketTitleIdHex}), TMD ({report.TmdTitleIdHex}) y NCCH ProgramID ({report.NcchProgramIdHex}).");
                     return result;
                 }
-                result.ChecksPassed.Add($"Consistencia de TitleID ({report.TmdTitleIdHex}) y versión ({report.TmdTitleVersionFormatted}) verificada.");
+                if (expectedTitleVersionRaw.HasValue && report.TmdTitleVersionRaw != expectedTitleVersionRaw.Value)
+                {
+                    result.Errors.Add(
+                        $"TitleVersion en TMD ({report.TmdTitleVersionFormatted} / 0x{report.TmdTitleVersionRaw:X4}) no coincide con la versión esperada ({CiaConstants.FormatTitleVersion(expectedTitleVersionRaw.Value)} / 0x{expectedTitleVersionRaw.Value:X4}).");
+                    return result;
+                }
+
+                result.ChecksPassed.Add($"Consistencia de TitleID ({report.TmdTitleIdHex}) y versión ({report.TmdTitleVersionFormatted} / raw={report.TmdTitleVersionRaw}) verificada.");
 
                 if (expectedSaveDataSize.HasValue && report.SaveDataSizeBytes != expectedSaveDataSize.Value)
                 {

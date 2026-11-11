@@ -290,6 +290,73 @@ namespace IEGORandomizer.Engine.Validation
                     sink.Add($"Fichaje PalPack 0x{card.ItemID:X8} apunta a jugador inexistente 0x{card.RecrutedCharacterId:X8}.");
                 }
             }
+
+            // Verify 5v5 Pachanga vs 11v11 Match formation/category invariants (prevents first-pachanga btl_manager freeze!)
+            var teamParams = game.GetTeamParams();
+            var soccers = game.GetSoccers() ?? Array.Empty<ISoccerInfo>();
+            var allItems = game.GetItems("all") ?? Array.Empty<IItemConfig>();
+            var itemById = allItems.Where(i => i.ItemID != 0).GroupBy(i => i.ItemID).ToDictionary(g => g.Key, g => g.First());
+
+            var storyIds = new HashSet<int>(storyTeams.Select(t => t.TeamConfigID).Where(id => id != 0));
+            var encountIds = new HashSet<int>(encountTeams.Select(t => t.TeamConfigID).Where(id => id != 0));
+            var miniBattleParamIds = new HashSet<int>(
+                soccers.Where(s => s != null && s.SoccerMode == 1 && s.TeamParamID != 0).Select(s => s.TeamParamID));
+            var fullMatchParamIds = new HashSet<int>(
+                soccers.Where(s => s != null && s.SoccerMode == 2 && s.TeamParamID != 0).Select(s => s.TeamParamID));
+            var ifaLookup = Lynx.Core.RomFs.Level5IdHelper.BuildPrefixLookup("ifa");
+            var ifbLookup = Lynx.Core.RomFs.Level5IdHelper.BuildPrefixLookup("ifb");
+
+            foreach (var tp in teamParams)
+            {
+                if (tp.TeamParamID == 0)
+                    continue;
+
+                bool isPachanga = IEGORandomizer.Engine.Modules.TeamRandomizerModule.IsMiniBattleTeamParam(
+                    tp,
+                    storyIds,
+                    encountIds,
+                    miniBattleParamIds,
+                    fullMatchParamIds);
+
+                if (tp.FormationID != 0)
+                {
+                    if (itemById.TryGetValue(tp.FormationID, out var fItem) && fItem.ItemCategory == 17)
+                    {
+                        sink.Add($"TeamParam 0x{tp.TeamParamID:X8} tiene objeto PalPack (Cat.17) 0x{tp.FormationID:X8} como Formación.");
+                    }
+
+                    if (isPachanga && (ifaLookup.ContainsKey(tp.FormationID) ||
+                                       (itemById.TryGetValue(tp.FormationID, out var mfItem) && mfItem.ItemCategory == 19)))
+                    {
+                        sink.Add($"Pachanga 5v5 TeamParam 0x{tp.TeamParamID:X8} tiene Formación 11v11 (ifa/Cat.19) 0x{tp.FormationID:X8} (causa cuelgue en btl_manager).");
+                    }
+                    else if (!isPachanga && storyIds.Contains(tp.TeamConfigID) &&
+                             (ifbLookup.ContainsKey(tp.FormationID) ||
+                              (itemById.TryGetValue(tp.FormationID, out var bfItem) && bfItem.ItemCategory == 20)))
+                    {
+                        sink.Add($"Partido 11v11 TeamParam 0x{tp.TeamParamID:X8} tiene Formación 5v5 (ifb/Cat.20) 0x{tp.FormationID:X8}.");
+                    }
+                }
+
+                if (tp.TacticID != 0 && itemById.TryGetValue(tp.TacticID, out var tItem) && tItem.ItemCategory == 18)
+                {
+                    sink.Add($"TeamParam 0x{tp.TeamParamID:X8} tiene Espíritu Guerrero (Cat.18) 0x{tp.TacticID:X8} como Supertáctica.");
+                }
+            }
+
+            // Verify overworld ENCOUNT_INFO (*.encount.bin) PlayerID1..5 referential validity
+            foreach (var sp in MapDataService.LoadAllEncounterSpawns(game.IE_A.Directory))
+            {
+                int[] pids = { sp.Record.PlayerID1, sp.Record.PlayerID2, sp.Record.PlayerID3, sp.Record.PlayerID4, sp.Record.PlayerID5 };
+                for (int i = 0; i < pids.Length; i++)
+                {
+                    int pid = pids[i];
+                    if (pid != 0 && !paramHashes.Contains(pid) && !baseHashes.Contains(pid))
+                    {
+                        sink.Add($"ENCOUNT_INFO {sp.VirtualFilePath} [#{sp.NodeIndex} slot {i + 1}] referencia ID inexistente 0x{pid:X8}.");
+                    }
+                }
+            }
         }
     }
 }

@@ -64,10 +64,25 @@ namespace IEGORandomizer.Engine.Modules
                 (options.RandomizeTeamAndRivalSlots || options.RandomizePachangaPlayers || options.RandomizePalpackRecruits))
             {
                 DeterministicRng swapRng = seeds.GetSubsystem("players.swap");
+                DeterministicRng dedupRng = seeds.GetSubsystem("players.team_dedup");
                 Dictionary<int, int> paramDerangement = BuildPlayerDerangementMap(
                     swappableParams,
                     swapRng,
                     options.PreserveGoalkeeperRolesInRosters);
+
+                // Build BaseHash -> BaseHash remap for overworld encounter tables that reference BaseHash (cpXXXX)
+                var baseDerangement = new Dictionary<int, int>();
+                foreach (var kvp in paramDerangement)
+                {
+                    if (paramByHash.TryGetValue(kvp.Key, out var srcParam) &&
+                        paramByHash.TryGetValue(kvp.Value, out var dstParam) &&
+                        srcParam.BaseHash != 0 &&
+                        dstParam.BaseHash != 0 &&
+                        !baseDerangement.ContainsKey(srcParam.BaseHash))
+                    {
+                        baseDerangement[srcParam.BaseHash] = dstParam.BaseHash;
+                    }
+                }
 
                 if (options.RandomizeTeamAndRivalSlots)
                 {
@@ -76,11 +91,30 @@ namespace IEGORandomizer.Engine.Modules
                         if (protection.ScriptedTeamConfigHashes.Contains(team.TeamConfigID))
                             continue;
 
+                        // Pre-seed BaseHashes of protected / fixed slots so no swapped player duplicates a story teammate's 3D head
+                        var usedBasesOnTeam = new HashSet<int>();
+                        for (int slot = 1; slot <= 16; slot++)
+                        {
+                            int h = TeamSlotAccessor.GetStoryPlayer(team, slot);
+                            if (h != 0 && !paramDerangement.ContainsKey(h) && paramByHash.TryGetValue(h, out var fixedP) && fixedP.BaseHash != 0)
+                            {
+                                usedBasesOnTeam.Add(fixedP.BaseHash);
+                            }
+                        }
+
                         for (int slot = 1; slot <= 16; slot++)
                         {
                             int oldHash = TeamSlotAccessor.GetStoryPlayer(team, slot);
                             if (oldHash != 0 && paramDerangement.TryGetValue(oldHash, out int newHash))
                             {
+                                newHash = EnsureUniqueTeamPlayer(
+                                    oldHash,
+                                    newHash,
+                                    slot == 1 && options.PreserveGoalkeeperRolesInRosters,
+                                    usedBasesOnTeam,
+                                    paramByHash,
+                                    swappableParams,
+                                    dedupRng);
                                 TeamSlotAccessor.SetStoryPlayer(team, slot, newHash);
                                 report.RandomizedTeamPlayerSlotsCount++;
                             }
@@ -90,9 +124,23 @@ namespace IEGORandomizer.Engine.Modules
 
                 if (options.RandomizePachangaPlayers)
                 {
-                    var encountTeamMap = new Dictionary<int, int[]>();
+                    var encountTeamMap = new Dictionary<int, (int[] ParamHashes, int[] BaseHashes)>();
                     foreach (var team in encountTeams)
                     {
+                        if (protection.ScriptedTeamConfigHashes.Contains(team.TeamConfigID))
+                            continue;
+
+                        var usedBasesOnTeam = new HashSet<int>();
+                        for (int i = 0; i < 5; i++)
+                        {
+                            int h = TeamSlotAccessor.GetEncountPlayer(team, i + 1);
+                            if (h != 0 && !paramDerangement.ContainsKey(h) && paramByHash.TryGetValue(h, out var fixedP) && fixedP.BaseHash != 0)
+                            {
+                                usedBasesOnTeam.Add(fixedP.BaseHash);
+                            }
+                        }
+
+                        int[] updatedParams = new int[5];
                         int[] updatedBases = new int[5];
                         for (int i = 0; i < 5; i++)
                         {
@@ -100,31 +148,147 @@ namespace IEGORandomizer.Engine.Modules
                             int resolvedHash = oldHash;
                             if (oldHash != 0 && paramDerangement.TryGetValue(oldHash, out int newHash))
                             {
-                                resolvedHash = newHash;
-                                TeamSlotAccessor.SetEncountPlayer(team, i + 1, newHash);
+                                resolvedHash = EnsureUniqueTeamPlayer(
+                                    oldHash,
+                                    newHash,
+                                    requireGk: false,
+                                    usedBasesOnTeam,
+                                    paramByHash,
+                                    swappableParams,
+                                    dedupRng);
+                                TeamSlotAccessor.SetEncountPlayer(team, i + 1, resolvedHash);
                                 report.RandomizedPachangaPlayerSlotsCount++;
                             }
+                            updatedParams[i] = resolvedHash;
                             updatedBases[i] = paramByHash.TryGetValue(resolvedHash, out var pObj) ? pObj.BaseHash : 0;
                         }
-                        encountTeamMap[team.TeamConfigID] = updatedBases;
+
+                        if (team.TeamConfigID != 0)
+                            encountTeamMap[team.TeamConfigID] = (updatedParams, updatedBases);
                     }
 
-                    // Synchronize overworld 3D pachanga NPCs with the randomized 5v5 pachanga roster.
-                    // Never overwrite ChasePlayer (2 = chases Arion on map, other = stationary)!
+                    // Also alias TeamParamID and SoccerID -> encountTeamMap so ENCOUNT_INFO.TeamID matches regardless of linkage
+                    var teamParamsForSpawns = game.GetTeamParams();
+                    var soccersForSpawns = game.GetSoccers() ?? Array.Empty<ISoccerInfo>();
+                    foreach (var tp in teamParamsForSpawns)
+                    {
+                        if (tp.TeamParamID != 0 && tp.TeamConfigID != 0 &&
+                            encountTeamMap.TryGetValue(tp.TeamConfigID, out var slots) &&
+                            !encountTeamMap.ContainsKey(tp.TeamParamID))
+                        {
+                            encountTeamMap[tp.TeamParamID] = slots;
+                        }
+                    }
+                    foreach (var sc in soccersForSpawns)
+                    {
+                        if (sc != null && sc.SoccerID != 0 && sc.TeamParamID != 0 &&
+                            encountTeamMap.TryGetValue(sc.TeamParamID, out var slots) &&
+                            !encountTeamMap.ContainsKey(sc.SoccerID))
+                        {
+                            encountTeamMap[sc.SoccerID] = slots;
+                        }
+                    }
+
+                    // Synchronize overworld 3D pachanga NPCs (*.encount.bin) strictly preserving each slot's hash domain
+                    // (ParamHash -> ParamHash, BaseHash -> BaseHash) and NEVER overwriting ChasePlayer!
                     if (mapSpawns.Count > 0)
                     {
+                        bool anySpawnModified = false;
                         foreach (var spawn in mapSpawns)
                         {
-                            if (encountTeamMap.TryGetValue(spawn.Record.TeamID, out int[] baseHashes))
+                            int tid = spawn.Record.TeamID;
+                            if (tid != 0 &&
+                                (protection.ScriptedMatchHashes.Contains(tid) ||
+                                 protection.ScriptedTeamConfigHashes.Contains(tid) ||
+                                 protection.ScriptedTeamParamHashes.Contains(tid)))
                             {
-                                if (baseHashes[0] != 0) spawn.Record.PlayerID1 = baseHashes[0];
-                                if (baseHashes[1] != 0) spawn.Record.PlayerID2 = baseHashes[1];
-                                if (baseHashes[2] != 0) spawn.Record.PlayerID3 = baseHashes[2];
-                                if (baseHashes[3] != 0) spawn.Record.PlayerID4 = baseHashes[3];
-                                if (baseHashes[4] != 0) spawn.Record.PlayerID5 = baseHashes[4];
+                                continue;
+                            }
+
+                            (int[] ParamHashes, int[] BaseHashes) linkedSlots = default;
+                            bool hasLinkedRoster = tid != 0 && encountTeamMap.TryGetValue(tid, out linkedSlots);
+                            var usedBasesInSpawn = new HashSet<int>();
+
+                            for (int slotIdx = 0; slotIdx < 5; slotIdx++)
+                            {
+                                int origId = GetSpawnPlayerSlot(spawn.Record, slotIdx);
+                                if (origId == 0)
+                                    continue;
+
+                                if (paramByHash.ContainsKey(origId))
+                                {
+                                    // Slot stores a CharaParam hash (para_cpXXXX): MUST write a CharaParam hash!
+                                    if (protection.ProtectedStoryPlayerParamHashes.Contains(origId))
+                                    {
+                                        if (paramByHash[origId].BaseHash != 0)
+                                            usedBasesInSpawn.Add(paramByHash[origId].BaseHash);
+                                        continue;
+                                    }
+
+                                    int candidateParam = 0;
+                                    if (hasLinkedRoster && linkedSlots.ParamHashes[slotIdx] != 0 && paramByHash.ContainsKey(linkedSlots.ParamHashes[slotIdx]))
+                                    {
+                                        candidateParam = linkedSlots.ParamHashes[slotIdx];
+                                    }
+                                    else if (paramDerangement.TryGetValue(origId, out int derangedParam))
+                                    {
+                                        candidateParam = derangedParam;
+                                    }
+
+                                    if (candidateParam != 0)
+                                    {
+                                        candidateParam = EnsureUniqueTeamPlayer(
+                                            origId,
+                                            candidateParam,
+                                            requireGk: false,
+                                            usedBasesInSpawn,
+                                            paramByHash,
+                                            swappableParams,
+                                            dedupRng);
+                                        if (candidateParam != origId)
+                                        {
+                                            SetSpawnPlayerSlot(spawn.Record, slotIdx, candidateParam);
+                                            anySpawnModified = true;
+                                        }
+                                    }
+                                }
+                                else if (baseByHash.ContainsKey(origId))
+                                {
+                                    // Slot stores a CharaBase hash (cpXXXX): MUST write a CharaBase hash!
+                                    int candidateBase = 0;
+                                    if (hasLinkedRoster && linkedSlots.BaseHashes[slotIdx] != 0 && baseByHash.ContainsKey(linkedSlots.BaseHashes[slotIdx]))
+                                    {
+                                        candidateBase = linkedSlots.BaseHashes[slotIdx];
+                                    }
+                                    else if (baseDerangement.TryGetValue(origId, out int derangedBase) && baseByHash.ContainsKey(derangedBase))
+                                    {
+                                        candidateBase = derangedBase;
+                                    }
+
+                                    if (candidateBase != 0 && usedBasesInSpawn.Contains(candidateBase))
+                                    {
+                                        var alt = swappableParams.FirstOrDefault(p => p.BaseHash != 0 && p.BaseHash != origId && !usedBasesInSpawn.Contains(p.BaseHash));
+                                        if (alt != null)
+                                            candidateBase = alt.BaseHash;
+                                    }
+
+                                    if (candidateBase != 0)
+                                    {
+                                        usedBasesInSpawn.Add(candidateBase);
+                                        if (candidateBase != origId)
+                                        {
+                                            SetSpawnPlayerSlot(spawn.Record, slotIdx, candidateBase);
+                                            anySpawnModified = true;
+                                        }
+                                    }
+                                }
                             }
                         }
-                        MapDataService.SaveEncounterSpawns(game.IE_A.Directory, mapSpawns);
+
+                        if (anySpawnModified)
+                        {
+                            MapDataService.SaveEncounterSpawns(game.IE_A.Directory, mapSpawns);
+                        }
                     }
                 }
 
@@ -462,6 +626,74 @@ namespace IEGORandomizer.Engine.Modules
                 Arc0SafeArchive.WriteFileAtPath(root, $"/data/bustup/face/{cpCode}a.xi", donor.Bustup);
                 Arc0SafeArchive.WriteFileAtPath(root, $"/data/chr/model/rpg/face/{cpCode}m.xc", donor.RpgModel);
                 Arc0SafeArchive.WriteFileAtPath(root, $"/data/chr/model/waza/face/{cpCode}a.xc", donor.WazaModel);
+            }
+        }
+
+        private static int EnsureUniqueTeamPlayer(
+            int oldParamHash,
+            int proposedParamHash,
+            bool requireGk,
+            HashSet<int> usedBasesOnTeam,
+            Dictionary<int, ICharaparam> paramByHash,
+            List<ICharaparam> swappableParams,
+            DeterministicRng rng)
+        {
+            if (paramByHash.TryGetValue(proposedParamHash, out var proposedObj) &&
+                proposedObj.BaseHash != 0 &&
+                !usedBasesOnTeam.Contains(proposedObj.BaseHash))
+            {
+                usedBasesOnTeam.Add(proposedObj.BaseHash);
+                return proposedParamHash;
+            }
+
+            var candidates = swappableParams
+                .Where(p => p.ParamHash != oldParamHash &&
+                            p.BaseHash != 0 &&
+                            !usedBasesOnTeam.Contains(p.BaseHash) &&
+                            (!requireGk || p.PlayerPosition == 1))
+                .ToList();
+
+            if (candidates.Count == 0 && requireGk)
+            {
+                candidates = swappableParams
+                    .Where(p => p.ParamHash != oldParamHash && p.BaseHash != 0 && !usedBasesOnTeam.Contains(p.BaseHash))
+                    .ToList();
+            }
+
+            if (candidates.Count > 0)
+            {
+                var chosen = rng.PickOne(candidates);
+                usedBasesOnTeam.Add(chosen.BaseHash);
+                return chosen.ParamHash;
+            }
+
+            if (paramByHash.TryGetValue(proposedParamHash, out var fallbackObj) && fallbackObj.BaseHash != 0)
+                usedBasesOnTeam.Add(fallbackObj.BaseHash);
+            return proposedParamHash;
+        }
+
+        private static int GetSpawnPlayerSlot(EncountMapRecord rec, int slotIndex)
+        {
+            return slotIndex switch
+            {
+                0 => rec.PlayerID1,
+                1 => rec.PlayerID2,
+                2 => rec.PlayerID3,
+                3 => rec.PlayerID4,
+                4 => rec.PlayerID5,
+                _ => 0
+            };
+        }
+
+        private static void SetSpawnPlayerSlot(EncountMapRecord rec, int slotIndex, int value)
+        {
+            switch (slotIndex)
+            {
+                case 0: rec.PlayerID1 = value; break;
+                case 1: rec.PlayerID2 = value; break;
+                case 2: rec.PlayerID3 = value; break;
+                case 3: rec.PlayerID4 = value; break;
+                case 4: rec.PlayerID5 = value; break;
             }
         }
 

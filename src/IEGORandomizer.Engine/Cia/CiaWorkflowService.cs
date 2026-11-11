@@ -212,6 +212,7 @@ namespace IEGORandomizer.Engine.Cia
                     ?? throw new InvalidOperationException("Carpeta temporal romfs inválida.");
 
                 // Rebuild the complete multi-content .cia incorporating stagedRomFsDir over 100% of original RomFS
+                var buildOptions = BuildCiaOptions(options.Cia);
                 var (telemetry, verification) = CiaPackageRebuilder.RebuildFromRomFsDirectoryOverlay(
                     fullSource,
                     stagedRomFsDir,
@@ -222,12 +223,32 @@ namespace IEGORandomizer.Engine.Cia
                         int mapped = 60 + (pct * 38) / 100;
                         Report(progress, mapped, msg);
                     },
-                    precomputedSourceSha256: sourcePreSha256);
+                    precomputedSourceSha256: sourcePreSha256,
+                    buildOptions: buildOptions);
 
                 report.CiaBuildTelemetry = telemetry;
                 report.CiaVerification = verification;
                 report.ExportedPaths.Clear();
                 report.ExportedPaths.Add(fullOutput);
+
+                // Optional companion Luma3DS LayeredFS quick-patch next to the .cia
+                if (options.Cia?.ExportCompanionLuma3dsPatch == true && File.Exists(stagedIea))
+                {
+                    string outDir = Path.GetDirectoryName(fullOutput) ?? string.Empty;
+                    string tid = !string.IsNullOrWhiteSpace(telemetry.TitleIdHex)
+                        ? telemetry.TitleIdHex
+                        : report.ResolvedTitleId;
+                    string lumaDest = Path.Combine(outDir, "Luma3DS", "titles", tid, "romfs", "ie_a.fa");
+                    Directory.CreateDirectory(Path.GetDirectoryName(lumaDest)!);
+                    File.Copy(stagedIea, lumaDest, overwrite: true);
+                    report.ExportedPaths.Add(lumaDest);
+                }
+
+                if (telemetry.IsFbiInPlaceUpdateReady)
+                {
+                    report.ValidationMessages.Add(
+                        $"[CIA-FBI] Actualización in-situ lista para FBI en 2DS/3DS: TitleID base {telemetry.TitleIdHex}, versión TMD {telemetry.SourceTitleVersionFormatted} -> {telemetry.TitleVersionFormatted} (raw={telemetry.TitleVersionRaw}), SaveDataSize intacto ({telemetry.PreservedSaveDataSizeBytes / 1024} KB, conserva 00000001.sav).");
+                }
 
                 foreach (string check in verification.ChecksPassed)
                 {
@@ -287,7 +308,8 @@ namespace IEGORandomizer.Engine.Cia
             string modifiedRomFsDirectory,
             string outputCiaPath,
             string aesKeysPath = null,
-            IProgress<RandomizerProgressStep> progress = null)
+            IProgress<RandomizerProgressStep> progress = null,
+            CiaPackageOptions ciaOptions = null)
         {
             if (string.IsNullOrWhiteSpace(sourceCiaPath))
                 throw new ArgumentException("Debe seleccionar el archivo .cia original.", nameof(sourceCiaPath));
@@ -336,6 +358,7 @@ namespace IEGORandomizer.Engine.Cia
                 preValidatedIea = true;
             }
 
+            var buildOptions = BuildCiaOptions(ciaOptions);
             var (telemetry, verification) = CiaPackageRebuilder.RebuildFromRomFsDirectoryOverlay(
                 fullSource,
                 resolvedRomFsRoot,
@@ -345,7 +368,8 @@ namespace IEGORandomizer.Engine.Cia
                 {
                     int mapped = 8 + (pct * 90) / 100;
                     Report(progress, mapped, msg);
-                });
+                },
+                buildOptions: buildOptions);
 
             var mergeReport = new CiaMergeExecutionReport
             {
@@ -460,11 +484,34 @@ namespace IEGORandomizer.Engine.Cia
             return outputPath;
         }
 
+        private static CiaBuildOptions BuildCiaOptions(CiaPackageOptions ciaOpts)
+        {
+            if (ciaOpts == null)
+                return new CiaBuildOptions { BumpVersionForFbiUpdate = true };
+
+            ushort? explicitVer = null;
+            if (!string.IsNullOrWhiteSpace(ciaOpts.CustomTitleVersionOverride))
+            {
+                if (!CiaConstants.TryParseTitleVersionString(ciaOpts.CustomTitleVersionOverride, out ushort parsed))
+                {
+                    throw new ArgumentException(
+                        $"Formato de versión TMD inválido ('{ciaOpts.CustomTitleVersionOverride}'). Usa un formato como '1.1.2' (mayor 0-63, menor 0-63, micro 0-15) o un entero 0-65535.");
+                }
+                explicitVer = parsed;
+            }
+
+            return new CiaBuildOptions
+            {
+                BumpVersionForFbiUpdate = ciaOpts.BumpTitleVersionForFbiUpdate,
+                TargetTitleVersionRaw = explicitVer
+            };
+        }
+
         private static void WriteCompanionCiaManifest(string manifestPath, RandomizationExecutionReport report)
         {
             var payload = new
             {
-                Generator = "IEGO Randomizer v1.1.0 (.cia Native Pipeline)",
+                Generator = "IEGO Randomizer v1.1.2 (.cia Native Pipeline + FBI In-Place Update)",
                 report.GeneratedAtUtc,
                 report.Seed,
                 report.SeedFingerprint,

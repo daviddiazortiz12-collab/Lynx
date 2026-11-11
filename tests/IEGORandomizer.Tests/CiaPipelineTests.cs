@@ -659,7 +659,7 @@ namespace IEGORandomizer.Tests
         // Synthetic Spec-Exact Multi-Content Nintendo 3DS .CIA Fixture Builder
         // =========================================================================
 
-        private static void BuildSyntheticLuzV000MultiContentCia(
+        internal static void BuildSyntheticLuzV000MultiContentCia(
             string outputCiaPath,
             out Dictionary<string, byte[]> romFsAssets,
             bool useFixedKeyNcch = false,

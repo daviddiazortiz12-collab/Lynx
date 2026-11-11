@@ -729,6 +729,7 @@ namespace IEGORandomizer.Tests
 
         private static TeamParamInfo MakeTeamParam(string paramCode, string configCode, int kitNum, int level, string drop1, string drop2)
         {
+            bool isMini = configCode.StartsWith("te", StringComparison.OrdinalIgnoreCase);
             return new TeamParamInfo
             {
                 TeamParamID = Level5IdHelper.ComputeCrc32Utf8(paramCode),
@@ -738,9 +739,9 @@ namespace IEGORandomizer.Tests
                 GlovesID = Level5IdHelper.ComputeCrc32Utf8("iie0003"),
                 BraceletID = Level5IdHelper.ComputeCrc32Utf8("iie0005"),
                 PendantID = Level5IdHelper.ComputeCrc32Utf8("iie0004"),
-                FormationID = Level5IdHelper.ComputeCrc32Utf8("iif0001"),
-                CoachID = Level5IdHelper.ComputeCrc32Utf8("iim0001"),
-                TacticID = Level5IdHelper.ComputeCrc32Utf8("iit0001"),
+                FormationID = Level5IdHelper.ComputeCrc32Utf8(isMini ? "iif0003" : "iif0001"),
+                CoachID = isMini ? 0 : Level5IdHelper.ComputeCrc32Utf8("iim0001"),
+                TacticID = isMini ? 0 : Level5IdHelper.ComputeCrc32Utf8("iit0001"),
                 Level = level,
                 AILevel = 2,
                 Friendship = level * 25,

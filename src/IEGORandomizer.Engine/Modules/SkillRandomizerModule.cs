@@ -37,9 +37,26 @@ namespace IEGORandomizer.Engine.Modules
             if (skills.Length == 0)
                 return;
 
-            // Identify Fighting Spirit exclusive skills ("wk*") vs standard player skills ("wh*")
-            var wkLookup = Level5IdHelper.BuildPrefixLookup("wks", "wko", "wkd", "wkk", "wkp");
-            var avatarMoveHashes = new HashSet<int>(wkLookup.Keys);
+            // Precompute canonical Level-5 CRC32 sets for genuine IEGO1 player & Fighting Spirit skills:
+            // Player active skills: whsXXXX (Shoot), whoXXXX (Dribble), whdXXXX (Block), whkXXXX (Save) [0001..8999]
+            // Player passive talents: whpXXXX [0001..8999] (retail SkillPosition == 15; synthetic test == 5)
+            // Fighting Spirit skills: wksXXXX (Shoot), wkoXXXX (Dribble), wkdXXXX (Block), wkkXXXX (Save), wkpXXXX (Passive)
+            // Limiting to 0001..8999 automatically excludes wh*9999 Ultimate Evolution Manuals AND all 25+ non-wh*
+            // Void/Totem/internal dummy entries in retail skill_config.cfg.bin that lack player battle animations!
+            var whsSet = BuildRangeHashSet("whs", 1, 8999);
+            var whoSet = BuildRangeHashSet("who", 1, 8999);
+            var whdSet = BuildRangeHashSet("whd", 1, 8999);
+            var whkSet = BuildRangeHashSet("whk", 1, 8999);
+            var whpSet = BuildRangeHashSet("whp", 1, 8999);
+
+            var wksSet = BuildRangeHashSet("wks", 1, 8999);
+            var wkoSet = BuildRangeHashSet("wko", 1, 8999);
+            var wkdSet = BuildRangeHashSet("wkd", 1, 8999);
+            var wkkSet = BuildRangeHashSet("wkk", 1, 8999);
+            var wkpSet = BuildRangeHashSet("wkp", 1, 8999);
+
+            var avatarMoveHashes = new HashSet<int>(
+                wksSet.Concat(wkoSet).Concat(wkdSet).Concat(wkkSet).Concat(wkpSet));
             foreach (var av in avatars)
             {
                 if (av.SpecialMoveID != 0) avatarMoveHashes.Add(av.SpecialMoveID);
@@ -51,14 +68,19 @@ namespace IEGORandomizer.Engine.Modules
                 .GroupBy(s => s.SkillHash)
                 .ToDictionary(g => g.Key, g => g.First());
 
-            // Exclude Ultimate Evolution Manual dummy rows (whs9999, who9999, whd9999, whk9999)
-            // which appear in retail skill_config.cfg.bin with SkillPosition 1..4, Power = 0, TPCost = 1.
+            // Capture original retail skill_table hashes BEFORE mutating skillTable:
+            // on full retail archives (skillTable.Length >= 100), intersecting with vanilla skill_table guarantees
+            // that unused/cut wh* stubs lacking .waza camera scripts can never be assigned to any player!
+            var vanillaSkillTableHashes = new HashSet<int>(
+                skillTable.Where(st => st != null && st.SkillHash != 0).Select(st => st.SkillHash));
+
             var dummyManualHashes = new HashSet<int>
             {
                 Level5IdHelper.ComputeCrc32Utf8("whs9999"),
                 Level5IdHelper.ComputeCrc32Utf8("who9999"),
                 Level5IdHelper.ComputeCrc32Utf8("whd9999"),
-                Level5IdHelper.ComputeCrc32Utf8("whk9999")
+                Level5IdHelper.ComputeCrc32Utf8("whk9999"),
+                Level5IdHelper.ComputeCrc32Utf8("whp9999")
             };
 
             // 1. Optional Skill Parameter Randomization (TPCost, Power, Element)
@@ -72,9 +94,25 @@ namespace IEGORandomizer.Engine.Modules
                     if (sk.SkillHash == 0 || dummyManualHashes.Contains(sk.SkillHash))
                         continue;
 
-                    // SkillPosition 5 = Passive Skill/Talent (TPCost = 0, Power = 0); skip dummy 0-power active rows
-                    if (sk.SkillPosition == 5 || sk.TPCost <= 1 || sk.Power <= 0)
+                    bool isStandardPlayerActive = whsSet.Contains(sk.SkillHash) ||
+                                                  whoSet.Contains(sk.SkillHash) ||
+                                                  whdSet.Contains(sk.SkillHash) ||
+                                                  whkSet.Contains(sk.SkillHash);
+                    bool isAvatarActive = wksSet.Contains(sk.SkillHash) ||
+                                          wkoSet.Contains(sk.SkillHash) ||
+                                          wkdSet.Contains(sk.SkillHash) ||
+                                          wkkSet.Contains(sk.SkillHash);
+
+                    // Skip passive talents (retail SkillPosition == 15, synthetic == 5, or whp*/wkp*) and non-wh*/wk* internal rows
+                    if ((!isStandardPlayerActive && !isAvatarActive) ||
+                        whpSet.Contains(sk.SkillHash) ||
+                        sk.SkillPosition == 15 ||
+                        sk.SkillPosition == 5 ||
+                        sk.TPCost <= 1 ||
+                        sk.Power <= 0)
+                    {
                         continue;
+                    }
 
                     if (sk.Element >= 1 && sk.Element <= 4)
                     {
@@ -96,19 +134,54 @@ namespace IEGORandomizer.Engine.Modules
                 game.SaveSkillConfigs(skills);
             }
 
-            // Build categorized player-usable skill pools (MovePositions.json: 1=Save, 2=Shot, 3=Dribble, 4=Block, 5=Talent)
-            var playerMoves = skills
+            // Build categorized player-usable skill pools strictly from genuine wh[sodkp]0001..8999 entries
+            // (excluding Fighting Spirit SkillType == 2 moves and non-wh* Void/Totem/buff internal entries)
+            var candidateActiveMoves = skills
                 .Where(s => s.SkillHash != 0 &&
+                            s.SkillType != 2 &&
                             !avatarMoveHashes.Contains(s.SkillHash) &&
-                            !dummyManualHashes.Contains(s.SkillHash))
+                            !dummyManualHashes.Contains(s.SkillHash) &&
+                            s.Power > 0 &&
+                            s.TPCost > 1 &&
+                            (whsSet.Contains(s.SkillHash) ||
+                             whoSet.Contains(s.SkillHash) ||
+                             whdSet.Contains(s.SkillHash) ||
+                             whkSet.Contains(s.SkillHash)))
                 .ToList();
 
-            var saveMoves = playerMoves.Where(s => s.SkillPosition == 1 && s.Power > 0 && s.TPCost > 1).ToList();
-            var shotMoves = playerMoves.Where(s => s.SkillPosition == 2 && s.Power > 0 && s.TPCost > 1).ToList();
-            var dribbleMoves = playerMoves.Where(s => s.SkillPosition == 3 && s.Power > 0 && s.TPCost > 1).ToList();
-            var blockMoves = playerMoves.Where(s => s.SkillPosition == 4 && s.Power > 0 && s.TPCost > 1).ToList();
-            var activeFieldMoves = playerMoves.Where(s => s.SkillPosition >= 1 && s.SkillPosition <= 4 && s.Power > 0 && s.TPCost > 1).ToList();
-            var talentMoves = playerMoves.Where(s => s.SkillPosition == 5).ToList();
+            if (skillTable.Length >= 100)
+            {
+                var retailVerifiedActives = candidateActiveMoves
+                    .Where(s => vanillaSkillTableHashes.Contains(s.SkillHash))
+                    .ToList();
+                if (retailVerifiedActives.Count >= 40)
+                    candidateActiveMoves = retailVerifiedActives;
+            }
+
+            var saveMoves = candidateActiveMoves.Where(s => whkSet.Contains(s.SkillHash)).ToList();
+            var shotMoves = candidateActiveMoves.Where(s => whsSet.Contains(s.SkillHash)).ToList();
+            var dribbleMoves = candidateActiveMoves.Where(s => whoSet.Contains(s.SkillHash)).ToList();
+            var blockMoves = candidateActiveMoves.Where(s => whdSet.Contains(s.SkillHash)).ToList();
+            var activeFieldMoves = candidateActiveMoves;
+
+            var talentMoves = skills
+                .Where(s => s.SkillHash != 0 &&
+                            s.SkillType != 2 &&
+                            !avatarMoveHashes.Contains(s.SkillHash) &&
+                            !dummyManualHashes.Contains(s.SkillHash) &&
+                            (whpSet.Contains(s.SkillHash) || s.SkillPosition == 15 || s.SkillPosition == 5) &&
+                            s.TPCost == 0)
+                .Where(s => whpSet.Contains(s.SkillHash))
+                .ToList();
+
+            if (skillTable.Length >= 100)
+            {
+                var retailVerifiedTalents = talentMoves
+                    .Where(s => vanillaSkillTableHashes.Contains(s.SkillHash))
+                    .ToList();
+                if (retailVerifiedTalents.Count >= 10)
+                    talentMoves = retailVerifiedTalents;
+            }
 
             // 2. Player Initial Skills, Level-Up Learnsets, and Talents
             if ((options.RandomizeInitialSkills || options.RandomizeLevelUpLearnsets || options.RandomizeTalents) &&
@@ -145,8 +218,9 @@ namespace IEGORandomizer.Engine.Modules
                         }
 
                         bool isInitialSlot = slot == 0 || entry.LevelLearned <= 5;
-                        bool wasTalent = skillByHash.TryGetValue(entry.SkillHash, out var origSkill) &&
-                                         origSkill.SkillPosition == 5;
+                        bool wasTalent = whpSet.Contains(entry.SkillHash) ||
+                                         (skillByHash.TryGetValue(entry.SkillHash, out var origSkill) &&
+                                          (origSkill.SkillPosition == 15 || origSkill.SkillPosition == 5));
 
                         if (wasTalent)
                         {
@@ -221,9 +295,11 @@ namespace IEGORandomizer.Engine.Modules
                 DeterministicRng avSkillRng = seeds.GetSubsystem("skills.avatars");
 
                 var avatarActivePool = skills
-                    .Where(s => avatarMoveHashes.Contains(s.SkillHash) &&
+                    .Where(s => (wksSet.Contains(s.SkillHash) ||
+                                 wkoSet.Contains(s.SkillHash) ||
+                                 wkdSet.Contains(s.SkillHash) ||
+                                 wkkSet.Contains(s.SkillHash)) &&
                                 !dummyManualHashes.Contains(s.SkillHash) &&
-                                s.SkillPosition >= 1 && s.SkillPosition <= 4 &&
                                 s.Power > 0)
                     .ToList();
 
@@ -245,9 +321,9 @@ namespace IEGORandomizer.Engine.Modules
                             continue;
                         }
 
-                        // Match avatar position role when possible (PlayerPositions: 1=GK->Save(1), 2=FW->Shot(2), 3=MF->Dribble/Shot, 4=DF->Block(4))
+                        // Match avatar position role using canonical wk* prefix (1=GK->wkk, 2=FW->wks, 3=MF->wko/wks, 4=DF->wkd)
                         var roleMatches = avatarActivePool
-                            .Where(s => IsMoveMatchingAvatarPosition(av.Position, s.SkillPosition))
+                            .Where(s => IsAvatarMoveMatchingPosition(av.Position, s.SkillHash, wksSet, wkoSet, wkdSet, wkkSet))
                             .ToList();
                         var pool = roleMatches.Count > 0 ? roleMatches : avatarActivePool;
 
@@ -375,14 +451,30 @@ namespace IEGORandomizer.Engine.Modules
             return Math.Max(20, cp.TP);
         }
 
-        private static bool IsMoveMatchingAvatarPosition(int avatarPosition, int skillPosition)
+        private static HashSet<int> BuildRangeHashSet(string prefix, int minInclusive, int maxInclusive)
+        {
+            var set = new HashSet<int>(maxInclusive - minInclusive + 1);
+            for (int i = minInclusive; i <= maxInclusive; i++)
+            {
+                set.Add(Level5IdHelper.ComputeCrc32Utf8($"{prefix}{i:D4}"));
+            }
+            return set;
+        }
+
+        private static bool IsAvatarMoveMatchingPosition(
+            int avatarPosition,
+            int skillHash,
+            HashSet<int> wksSet,
+            HashSet<int> wkoSet,
+            HashSet<int> wkdSet,
+            HashSet<int> wkkSet)
         {
             return avatarPosition switch
             {
-                1 => skillPosition == 1, // GK -> Save
-                2 => skillPosition == 2, // FW -> Shot
-                3 => skillPosition == 3 || skillPosition == 2, // MF -> Dribble/Shot
-                4 => skillPosition == 4, // DF -> Block
+                1 => wkkSet.Contains(skillHash), // GK -> Save (wkk)
+                2 => wksSet.Contains(skillHash), // FW -> Shoot (wks)
+                3 => wkoSet.Contains(skillHash) || wksSet.Contains(skillHash), // MF -> Dribble/Shoot
+                4 => wkdSet.Contains(skillHash), // DF -> Block (wkd)
                 _ => true
             };
         }

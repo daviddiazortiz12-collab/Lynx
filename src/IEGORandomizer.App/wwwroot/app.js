@@ -549,6 +549,11 @@
         exportLuma3dsLayeredFsStructure: $("expLayeredFs").checked,
         customTitleIdOverride: $("titleIdOverride").value,
         directCitraModsRootPath: $("expDirectCitra").checked ? $("citraModsRootInput").value.trim() : ""
+      },
+      cia: {
+        bumpTitleVersionForFbiUpdate: $("ciaFbiUpdateBump") ? $("ciaFbiUpdateBump").checked : true,
+        customTitleVersionOverride: $("ciaCustomVersion") ? $("ciaCustomVersion").value.trim() : "",
+        exportCompanionLuma3dsPatch: $("ciaCompanionLuma") ? $("ciaCompanionLuma").checked : false
       }
     };
   }
@@ -587,7 +592,12 @@
         sourceCiaPath,
         modifiedRomFsDirectory,
         outputCiaPath,
-        aesKeysPath: ($("aesKeysPath").value || "").trim()
+        aesKeysPath: ($("aesKeysPath").value || "").trim(),
+        cia: {
+          bumpTitleVersionForFbiUpdate: $("ciaFbiUpdateBump") ? $("ciaFbiUpdateBump").checked : true,
+          customTitleVersionOverride: $("ciaCustomVersion") ? $("ciaCustomVersion").value.trim() : "",
+          exportCompanionLuma3dsPatch: false
+        }
       };
     } else {
       const inputPath = $("inputPath").value.trim();
@@ -704,6 +714,7 @@
         const ciaBannerHtml = isCiaJob
           ? `<div style="margin-top:8px;padding:9px 12px;border-radius:8px;background:rgba(16,185,129,0.16);border:1px solid rgba(16,185,129,0.42);font-size:0.84rem;line-height:1.48;">
               📦 <strong>Nuevo .cia generado y verificado en frío:</strong> <code>${escapeHtml(rep.ciaBuildTelemetry.outputCiaPath)}</code> (${(rep.ciaBuildTelemetry.outputCiaSizeBytes / (1024 * 1024)).toFixed(1)} MB)<br/>
+              • <strong>Versión TMD para FBI (2DS/3DS):</strong> <code>${escapeHtml(rep.ciaBuildTelemetry.sourceTitleVersionFormatted || "V.0.0.0")} → ${escapeHtml(rep.ciaBuildTelemetry.titleVersionFormatted || "V.1.1.2")}</code> ${rep.ciaBuildTelemetry.isFbiInPlaceUpdateReady ? "✅ <em>(Actualización directa encima en FBI conservando partida 00000001.sav)</em>" : ""}<br/>
               • <strong>RomFS completa preservada:</strong> ${rep.ciaBuildTelemetry.outputRomFsFileCount} archivos totales (origen: ${rep.ciaBuildTelemetry.sourceRomFsFileCount}) · <strong>SaveDataSize:</strong> ${Math.round(rep.ciaBuildTelemetry.preservedSaveDataSizeBytes / 1024)} KB · <strong>IVFC SHA-256:</strong> ${rep.ciaVerification ? rep.ciaVerification.verifiedIvfcBlocksCount : 0} bloques<br/>
               • <strong>SHA-256 .cia original intacto:</strong> <code style="font-size:0.74rem;">${escapeHtml(rep.ciaBuildTelemetry.sourceCiaSha256Hex)}</code>
             </div>`

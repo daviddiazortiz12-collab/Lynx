@@ -1,12 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using IEGORandomizer.Engine.Configuration;
 using IEGORandomizer.Engine.Protection;
 using IEGORandomizer.Engine.Seeding;
 using Lynx.Core.Games;
 using Lynx.Core.Maps;
+using Lynx.Core.RomFs;
 using Lynx.InazumaEleven.Logic;
 
 namespace IEGORandomizer.Engine.Modules
@@ -14,7 +14,7 @@ namespace IEGORandomizer.Engine.Modules
     /// <summary>
     /// Subsystem C: Randomizes Story/Rival/Route Teams and 5v5 Pachanga Teams:
     /// kit numbers, formations, coaches, tactics, team levels, and team equipment
-    /// (synchronizing overworld <c>EncountMapRecord.Boots</c> when pachanga boots change).
+    /// (synchronizing overworld <c>EncountMapRecord.Boots</c> safely within its domain).
     /// </summary>
     public static class TeamRandomizerModule
     {
@@ -31,57 +31,90 @@ namespace IEGORandomizer.Engine.Modules
             var storyTeams = game.GetStoryTeamsOnly();
             var encountTeams = game.GetEncounterTeamsOnly();
             var teamParams = game.GetTeamParams();
+            var soccers = game.GetSoccers() ?? Array.Empty<ISoccerInfo>();
             var allItems = game.GetItems("all") ?? Array.Empty<IItemConfig>();
             var directors = game.GetItems("director") ?? Array.Empty<IItemConfig>();
 
             var storyTeamIds = new HashSet<int>(storyTeams.Select(t => t.TeamConfigID).Where(id => id != 0));
             var encountTeamIds = new HashSet<int>(encountTeams.Select(t => t.TeamConfigID).Where(id => id != 0));
 
-            // ItemTypes.json:
+            // SoccerMode in soccer_config.cfg.bin (verified against SoccersWindow.Designer.cs):
+            // 0 = None, 1 = Mini-Battle (5v5 Pachanga), 2 = Match (11v11)
+            var miniBattleParamIds = new HashSet<int>(
+                soccers.Where(s => s != null && s.SoccerMode == 1 && s.TeamParamID != 0).Select(s => s.TeamParamID));
+            var fullMatchParamIds = new HashSet<int>(
+                soccers.Where(s => s != null && s.SoccerMode == 2 && s.TeamParamID != 0).Select(s => s.TeamParamID));
+
+            // Prefix CRC32 lookups for 11v11 formations (ifaXXXX), 5v5 mini-battle formations (ifbXXXX), and tactics (iisXXXX)
+            var ifaLookup = Level5IdHelper.BuildPrefixLookup("ifa");
+            var ifbLookup = Level5IdHelper.BuildPrefixLookup("ifb");
+            var iisLookup = Level5IdHelper.BuildPrefixLookup("iis");
+
+            // ItemTypes.json (retail IEGO1):
             // 1 = Boots, 2 = Gloves, 3 = Bracelet, 4 = Pendant
-            // 19 = Formation (Match), 20 = Formation (Mini-Battle), 21 = Coach, 23 = Tactic
+            // 17 = Palpack (NEVER a formation!), 18 = Fighting Spirit (NEVER a tactic!)
+            // 19 = Formation (11v11 Match), 20 = Formation (5v5 Mini-Battle), 21 = Coach, 23 = Tactic
             var bootsPool = allItems.Where(i => i.ItemID != 0 && i.ItemCategory == 1).Select(i => i.ItemID).Distinct().ToList();
             var glovesPool = allItems.Where(i => i.ItemID != 0 && i.ItemCategory == 2).Select(i => i.ItemID).Distinct().ToList();
             var braceletPool = allItems.Where(i => i.ItemID != 0 && i.ItemCategory == 3).Select(i => i.ItemID).Distinct().ToList();
             var pendantPool = allItems.Where(i => i.ItemID != 0 && i.ItemCategory == 4).Select(i => i.ItemID).Distinct().ToList();
 
-            var matchFormations = allItems.Where(i => i.ItemID != 0 && (i.ItemCategory == 19 || i.ItemCategory == 17))
-                .Where(i => i.ItemRef != 90) // exclude Palpack (ItemRef 90)
-                .Select(i => i.ItemID)
-                .Distinct()
-                .ToList();
-            // Also include any valid formation IDs already present in vanilla TeamParams so pools are never empty
+            var miniFormationSet = new HashSet<int>(
+                allItems.Where(i => i.ItemID != 0 && (i.ItemCategory == 20 || ifbLookup.ContainsKey(i.ItemID)))
+                        .Where(i => !ifaLookup.ContainsKey(i.ItemID))
+                        .Select(i => i.ItemID));
+
+            var matchFormationSet = new HashSet<int>(
+                allItems.Where(i => i.ItemID != 0 && (i.ItemCategory == 19 || ifaLookup.ContainsKey(i.ItemID)))
+                        .Where(i => i.ItemRef != 90 && !ifbLookup.ContainsKey(i.ItemID) && !miniFormationSet.Contains(i.ItemID))
+                        .Select(i => i.ItemID));
+
+            // Include valid vanilla formations from unambiguously classified TeamParams
             foreach (var tp in teamParams)
             {
-                if (tp.FormationID != 0 && storyTeamIds.Contains(tp.TeamConfigID) && !matchFormations.Contains(tp.FormationID))
-                    matchFormations.Add(tp.FormationID);
+                if (tp.FormationID == 0)
+                    continue;
+
+                if (ifbLookup.ContainsKey(tp.FormationID))
+                {
+                    miniFormationSet.Add(tp.FormationID);
+                    matchFormationSet.Remove(tp.FormationID);
+                }
+                else if (ifaLookup.ContainsKey(tp.FormationID))
+                {
+                    matchFormationSet.Add(tp.FormationID);
+                    miniFormationSet.Remove(tp.FormationID);
+                }
+                else if (encountTeamIds.Contains(tp.TeamConfigID) ||
+                         (miniBattleParamIds.Contains(tp.TeamParamID) && !fullMatchParamIds.Contains(tp.TeamParamID)))
+                {
+                    if (!matchFormationSet.Contains(tp.FormationID))
+                        miniFormationSet.Add(tp.FormationID);
+                }
+                else if (storyTeamIds.Contains(tp.TeamConfigID) && !miniFormationSet.Contains(tp.FormationID))
+                {
+                    matchFormationSet.Add(tp.FormationID);
+                }
             }
 
-            var miniFormations = allItems.Where(i => i.ItemID != 0 && i.ItemCategory == 20)
-                .Select(i => i.ItemID)
-                .Distinct()
-                .ToList();
-            foreach (var tp in teamParams)
-            {
-                if (tp.FormationID != 0 && encountTeamIds.Contains(tp.TeamConfigID) && !miniFormations.Contains(tp.FormationID))
-                    miniFormations.Add(tp.FormationID);
-            }
+            var matchFormations = matchFormationSet.OrderBy(x => x).ToList();
+            var miniFormations = miniFormationSet.OrderBy(x => x).ToList();
 
             var coachPool = directors.Where(d => d.ItemID != 0).Select(d => d.ItemID)
                 .Concat(allItems.Where(i => i.ItemID != 0 && i.ItemCategory == 21).Select(i => i.ItemID))
                 .Distinct()
                 .ToList();
 
-            var tacticPool = allItems.Where(i => i.ItemID != 0 && (i.ItemCategory == 23 || i.ItemCategory == 18))
-                .Where(i => i.ItemRef != 100) // exclude Avatar (ItemRef 100)
-                .Select(i => i.ItemID)
-                .Distinct()
-                .ToList();
+            var tacticSet = new HashSet<int>(
+                allItems.Where(i => i.ItemID != 0 && (i.ItemCategory == 23 || iisLookup.ContainsKey(i.ItemID)))
+                        .Where(i => i.ItemCategory != 18 && i.ItemRef != 100)
+                        .Select(i => i.ItemID));
             foreach (var tp in teamParams)
             {
-                if (tp.TacticID != 0 && !tacticPool.Contains(tp.TacticID))
-                    tacticPool.Add(tp.TacticID);
+                if (tp.TacticID != 0 && storyTeamIds.Contains(tp.TeamConfigID))
+                    tacticSet.Add(tp.TacticID);
             }
+            var tacticPool = tacticSet.OrderBy(x => x).ToList();
 
             // Build valid Emblem1 pool from existing teams + /data/emblem/embXXXX.xi
             var emblemPool = new HashSet<int>();
@@ -140,6 +173,9 @@ namespace IEGORandomizer.Engine.Modules
                 {
                     foreach (var et in encountTeams)
                     {
+                        if (protection.ScriptedTeamConfigHashes.Contains(et.TeamConfigID))
+                            continue;
+
                         if (options.RandomizeKitNumbers)
                         {
                             AssignEncountShirtNumbers(et, kitNumRng);
@@ -162,44 +198,56 @@ namespace IEGORandomizer.Engine.Modules
             DeterministicRng levelRng = seeds.GetSubsystem("teams.levels");
             DeterministicRng equipRng = seeds.GetSubsystem("teams.equipment");
 
-            var pachangaBootsByTeamConfig = new Dictionary<int, int>();
+            var pachangaBootsByKey = new Dictionary<int, int>();
 
             foreach (var tp in teamParams)
             {
                 if (tp.TeamParamID == 0)
                     continue;
 
-                bool isPachanga = encountTeamIds.Contains(tp.TeamConfigID);
+                bool isPachanga = IsMiniBattleTeamParam(
+                    tp,
+                    storyTeamIds,
+                    encountTeamIds,
+                    miniBattleParamIds,
+                    fullMatchParamIds,
+                    miniFormationSet);
+
                 bool isScriptedStory = protection.RaimonCoreTeamConfigHashes.Contains(tp.TeamConfigID) ||
                                        protection.ScriptedTeamParamHashes.Contains(tp.TeamParamID) ||
-                                       protection.ScriptedTeamConfigHashes.Contains(tp.TeamConfigID);
+                                       (tp.TeamConfigID != 0 && protection.ScriptedTeamConfigHashes.Contains(tp.TeamConfigID));
 
                 if (isPachanga && !options.RandomizePachangaTeams)
                     continue;
                 if (!isPachanga && !options.RandomizeStoryAndRouteTeams)
                     continue;
 
-                // Protect scripted story matches from broken formations/impossible levels
+                // Protect scripted core teams from broken formations/impossible levels
                 if (isScriptedStory)
                     continue;
 
-                if (options.RandomizeFormations)
+                if (options.RandomizeFormations && tp.FormationID != 0)
                 {
-                    var fPool = isPachanga
-                        ? (miniFormations.Count > 0 ? miniFormations : matchFormations)
-                        : matchFormations;
-                    if (fPool.Count > 0)
-                        tp.FormationID = formRng.PickOne(fPool);
+                    if (isPachanga)
+                    {
+                        // NEVER assign an 11v11 Match formation (ifaXXXX) to a 5v5 Pachanga: btl_manager freezes immediately!
+                        if (miniFormations.Count > 0)
+                            tp.FormationID = formRng.PickOne(miniFormations);
+                    }
+                    else
+                    {
+                        if (matchFormations.Count > 0)
+                            tp.FormationID = formRng.PickOne(matchFormations);
+                    }
                 }
 
-                if (options.RandomizeCoaches && !isPachanga && coachPool.Count > 0)
+                if (!isPachanga)
                 {
-                    tp.CoachID = coachRng.PickOne(coachPool);
-                }
+                    if (options.RandomizeCoaches && coachPool.Count > 0)
+                        tp.CoachID = coachRng.PickOne(coachPool);
 
-                if (options.RandomizeTactics && !isPachanga && tacticPool.Count > 0)
-                {
-                    tp.TacticID = tacticRng.PickOne(tacticPool);
+                    if (options.RandomizeTactics && tacticPool.Count > 0)
+                        tp.TacticID = tacticRng.PickOne(tacticPool);
                 }
 
                 if (options.RandomizeLevels && tp.Level > 0)
@@ -216,9 +264,11 @@ namespace IEGORandomizer.Engine.Modules
                     if (braceletPool.Count > 0) tp.BraceletID = equipRng.PickOne(braceletPool);
                     if (pendantPool.Count > 0) tp.PendantID = equipRng.PickOne(pendantPool);
 
-                    if (isPachanga && tp.TeamConfigID != 0 && tp.BootsID != 0)
+                    if (isPachanga && tp.BootsID != 0)
                     {
-                        pachangaBootsByTeamConfig[tp.TeamConfigID] = tp.BootsID;
+                        if (tp.TeamConfigID != 0)
+                            pachangaBootsByKey[tp.TeamConfigID] = tp.BootsID;
+                        pachangaBootsByKey[tp.TeamParamID] = tp.BootsID;
                     }
                 }
 
@@ -228,26 +278,91 @@ namespace IEGORandomizer.Engine.Modules
                     report.RandomizedTeamsCount++;
             }
 
+            foreach (var sc in soccers)
+            {
+                if (sc != null && sc.SoccerID != 0 && sc.TeamParamID != 0 &&
+                    pachangaBootsByKey.TryGetValue(sc.TeamParamID, out int bId) &&
+                    !pachangaBootsByKey.ContainsKey(sc.SoccerID))
+                {
+                    pachangaBootsByKey[sc.SoccerID] = bId;
+                }
+            }
+
             game.SaveTeamParams(teamParams);
 
-            // Synchronize overworld pachanga boots if equipment was randomized
-            if (options.RandomizeEquipment && pachangaBootsByTeamConfig.Count > 0)
+            // Synchronize overworld pachanga boots safely within their existing domain (never overwrite 0 or mix int shoe indices with CRC32)
+            if (options.RandomizeEquipment && pachangaBootsByKey.Count > 0)
             {
                 var spawns = MapDataService.LoadAllEncounterSpawns(game.IE_A.Directory);
+                var smallShoeModelPool = spawns
+                    .Select(s => s.Record.Boots)
+                    .Where(b => b > 0 && b < 10_000)
+                    .Distinct()
+                    .OrderBy(b => b)
+                    .ToList();
+
                 bool modifiedSpawns = false;
                 foreach (var sp in spawns)
                 {
-                    if (pachangaBootsByTeamConfig.TryGetValue(sp.Record.TeamID, out int newBoots))
+                    if (sp.Record.Boots == 0)
+                        continue;
+
+                    if (sp.Record.Boots > 0 && sp.Record.Boots < 10_000)
+                    {
+                        if (smallShoeModelPool.Count > 1)
+                        {
+                            sp.Record.Boots = equipRng.PickOne(smallShoeModelPool);
+                            modifiedSpawns = true;
+                        }
+                    }
+                    else if (pachangaBootsByKey.TryGetValue(sp.Record.TeamID, out int newBoots) && newBoots != 0)
                     {
                         sp.Record.Boots = newBoots;
                         modifiedSpawns = true;
                     }
                 }
+
                 if (modifiedSpawns)
                 {
                     MapDataService.SaveEncounterSpawns(game.IE_A.Directory, spawns);
                 }
             }
+        }
+
+        internal static bool IsMiniBattleTeamParam(
+            ITeamParamInfo tp,
+            HashSet<int> storyTeamIds,
+            HashSet<int> encountTeamIds,
+            HashSet<int> miniBattleParamIds,
+            HashSet<int> fullMatchParamIds,
+            HashSet<int> miniFormationSet = null)
+        {
+            if (tp == null)
+                return false;
+
+            // Explicit 5-player ENCOUNT_TEAM_INFO (teXXXX) is always a 5v5 Pachanga
+            if (encountTeamIds != null && tp.TeamConfigID != 0 && encountTeamIds.Contains(tp.TeamConfigID))
+                return true;
+
+            // Explicit 16-player STORY_TEAM_INFO (tsXXXX) is a Story/Route team, never a 5-player pachanga
+            if (storyTeamIds != null && tp.TeamConfigID != 0 && storyTeamIds.Contains(tp.TeamConfigID))
+                return false;
+
+            // Overworld random pachangas in IEGO1 have TeamConfigID == 0 (their 5 players come from *.encount.bin)
+            // or reference a non-story SoccerMode == 1 / ifbXXXX mini-battle formation!
+            if (tp.TeamConfigID == 0)
+                return true;
+
+            if (miniBattleParamIds != null && miniBattleParamIds.Contains(tp.TeamParamID) &&
+                (fullMatchParamIds == null || !fullMatchParamIds.Contains(tp.TeamParamID)))
+            {
+                return true;
+            }
+
+            if (miniFormationSet != null && tp.FormationID != 0 && miniFormationSet.Contains(tp.FormationID))
+                return true;
+
+            return false;
         }
 
         private static void AssignStoryShirtNumbers(

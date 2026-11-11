@@ -33,21 +33,30 @@ namespace IEGORandomizer.Engine.Modules
             if (options == null || !options.Enabled)
                 return;
 
-            var validPachangaKits = visualProfile.ValidKitNumbers.OrderBy(k => k).ToList();
-            if (validPachangaKits.Count == 0)
+            var validBaseKits = visualProfile.ValidKitNumbers.OrderBy(k => k).ToList();
+            if (validBaseKits.Count == 0)
                 return;
 
-            var validRivalKits = visualProfile.ValidGoalkeeperKitNumbers.Count > 0
+            // Require complete field + goalkeeper 3D models (uzaXXXX.xc + uzbXXXX.xc) for ALL teams whenever available,
+            // because 5v5 pachangas with "Score a goal" victory conditions also render goalkeeper meshes!
+            var validCompleteKits = visualProfile.ValidGoalkeeperKitNumbers.Count > 0
                 ? visualProfile.ValidGoalkeeperKitNumbers.OrderBy(k => k).ToList()
-                : validPachangaKits;
+                : validBaseKits;
 
             if (!options.RandomizeRivalUniforms && !options.RandomizePachangaUniforms)
                 return;
 
             DeterministicRng kitRng = seeds.GetSubsystem("uniforms.kits");
             var teamParams = game.GetTeamParams();
-            var encountIds = new HashSet<int>(game.GetEncounterTeamsOnly().Select(e => e.TeamConfigID));
-            var pachangaKitByTeamId = new Dictionary<int, (int ChosenKitNum, int EncodedUniform)>();
+            var storyIds = new HashSet<int>(game.GetStoryTeamsOnly().Select(s => s.TeamConfigID).Where(id => id != 0));
+            var encountIds = new HashSet<int>(game.GetEncounterTeamsOnly().Select(e => e.TeamConfigID).Where(id => id != 0));
+            var soccers = game.GetSoccers() ?? Array.Empty<ISoccerInfo>();
+            var miniBattleParamIds = new HashSet<int>(
+                soccers.Where(s => s != null && s.SoccerMode == 1 && s.TeamParamID != 0).Select(s => s.TeamParamID));
+            var fullMatchParamIds = new HashSet<int>(
+                soccers.Where(s => s != null && s.SoccerMode == 2 && s.TeamParamID != 0).Select(s => s.TeamParamID));
+
+            var pachangaKitByKey = new Dictionary<int, (int ChosenKitNum, int EncodedUniform)>();
             bool modified = false;
 
             foreach (var tp in teamParams)
@@ -55,7 +64,17 @@ namespace IEGORandomizer.Engine.Modules
                 if (tp.TeamParamID == 0)
                     continue;
 
-                bool isPachanga = encountIds.Contains(tp.TeamConfigID);
+                // CRITICAL: Never overwrite Uniform == 0 (Episode 1 street-clothes / school-uniform pachangas)!
+                if (tp.Uniform <= 0)
+                    continue;
+
+                bool isPachanga = TeamRandomizerModule.IsMiniBattleTeamParam(
+                    tp,
+                    storyIds,
+                    encountIds,
+                    miniBattleParamIds,
+                    fullMatchParamIds);
+
                 if (isPachanga && !options.RandomizePachangaUniforms)
                     continue;
                 if (!isPachanga && !options.RandomizeRivalUniforms)
@@ -64,19 +83,16 @@ namespace IEGORandomizer.Engine.Modules
                 // Keep Raimon's own preset story rosters in Raimon uniform, plus any manually pinned team
                 if (protection.RaimonCoreTeamConfigHashes.Contains(tp.TeamConfigID) ||
                     protection.ScriptedTeamParamHashes.Contains(tp.TeamParamID) ||
-                    protection.ScriptedTeamConfigHashes.Contains(tp.TeamConfigID))
+                    (tp.TeamConfigID != 0 && protection.ScriptedTeamConfigHashes.Contains(tp.TeamConfigID)))
                 {
                     continue;
                 }
 
-                var kitPool = isPachanga ? validPachangaKits : validRivalKits;
                 int currentKitNum = tp.Uniform / 1000;
-                int chosenKitNum = ChooseDifferentKit(kitPool, currentKitNum, kitRng);
+                int chosenKitNum = ChooseDifferentKit(validCompleteKits, currentKitNum, kitRng);
 
-                bool canUseAway = isPachanga
-                    ? visualProfile.ValidAwayKitNumbers.Contains(chosenKitNum)
-                    : (visualProfile.ValidAwayGoalkeeperKitNumbers.Contains(chosenKitNum) ||
-                       (visualProfile.ValidGoalkeeperKitNumbers.Count == 0 && visualProfile.ValidAwayKitNumbers.Contains(chosenKitNum)));
+                bool canUseAway = visualProfile.ValidAwayGoalkeeperKitNumbers.Contains(chosenKitNum) ||
+                                  (visualProfile.ValidGoalkeeperKitNumbers.Count == 0 && visualProfile.ValidAwayKitNumbers.Contains(chosenKitNum));
 
                 int variantOffset = (canUseAway && kitRng.NextChancePercent(25)) ? 2 : 0;
                 int encodedUniform = (chosenKitNum * 1000) + variantOffset;
@@ -85,9 +101,21 @@ namespace IEGORandomizer.Engine.Modules
                 modified = true;
                 report.RandomizedTeamUniformsCount++;
 
-                if (isPachanga && tp.TeamConfigID != 0)
+                if (isPachanga)
                 {
-                    pachangaKitByTeamId[tp.TeamConfigID] = (chosenKitNum, encodedUniform);
+                    if (tp.TeamConfigID != 0)
+                        pachangaKitByKey[tp.TeamConfigID] = (chosenKitNum, encodedUniform);
+                    pachangaKitByKey[tp.TeamParamID] = (chosenKitNum, encodedUniform);
+                }
+            }
+
+            foreach (var sc in soccers)
+            {
+                if (sc != null && sc.SoccerID != 0 && sc.TeamParamID != 0 &&
+                    pachangaKitByKey.TryGetValue(sc.TeamParamID, out var choice) &&
+                    !pachangaKitByKey.ContainsKey(sc.SoccerID))
+                {
+                    pachangaKitByKey[sc.SoccerID] = choice;
                 }
             }
 
@@ -97,17 +125,21 @@ namespace IEGORandomizer.Engine.Modules
             }
 
             // Synchronize overworld 3D pachanga player uniforms with their battle TeamParam uniform
-            if (pachangaKitByTeamId.Count > 0)
+            if (pachangaKitByKey.Count > 0)
             {
                 var spawns = MapDataService.LoadAllEncounterSpawns(game.IE_A.Directory);
                 bool spawnsChanged = false;
                 foreach (var sp in spawns)
                 {
-                    if (pachangaKitByTeamId.TryGetValue(sp.Record.TeamID, out var kitChoice))
+                    // Never overwrite Uniform == 0 (street clothes / default map body model)!
+                    if (sp.Record.Uniform == 0)
+                        continue;
+
+                    if (pachangaKitByKey.TryGetValue(sp.Record.TeamID, out var kitChoice))
                     {
                         // In Ocelot / retail IEGO1 ENCOUNT_INFO, Uniform is stored as CRC32("iiuXXXX") ItemID
                         // when non-zero hash, or as small encoded kit integer (kitNum * 1000) in custom/test tables.
-                        if (sp.Record.Uniform >= 0 && sp.Record.Uniform < 2000000)
+                        if (sp.Record.Uniform > 0 && sp.Record.Uniform < 2000000)
                         {
                             sp.Record.Uniform = kitChoice.EncodedUniform;
                         }
