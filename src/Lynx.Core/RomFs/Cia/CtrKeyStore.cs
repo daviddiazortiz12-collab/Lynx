@@ -8,15 +8,45 @@ using System.Text;
 namespace Lynx.Core.RomFs.Cia
 {
     /// <summary>
-    /// Optional local user-supplied keybag loader (Citra / Azahar <c>aes_keys.txt</c> + <c>seeddb.bin</c>)
-    /// and pure C# seekable stream decryptors for CIA (AES-128-CBC) and NCCH (AES-128-CTR).
-    /// Contains ZERO proprietary Nintendo keys in code; Plain and FixedKey CIAs work with an empty store.
+    /// Built-in 3DS production crypto keyset (<c>makerom</c> / <c>GodMode9</c> compatible) plus optional
+    /// local <c>aes_keys.txt</c> / <c>seeddb.bin</c> overrides and high-throughput, zero-LOH seekable stream
+    /// decryptors for CIA (<c>AES-128-CBC</c>) and NCCH (<c>AES-128-CTR</c>).
+    /// <para>
+    /// Note: <c>new CtrKeyStore()</c> constructs an empty store (used by <see cref="CiaPackageVerifier"/> and unit tests
+    /// to prove that generated Plain CIAs have zero encryption dependencies), while <see cref="LoadAvailableLocalKeys"/>
+    /// preloads standard retail production keys so <c>.piratelegit.cia</c> / eShop / retail encrypted <c>.cia</c> files
+    /// work out-of-the-box without requiring any external <c>aes_keys.txt</c>.
+    /// </para>
     /// </summary>
     public sealed class CtrKeyStore
     {
-        // Standard 128-bit arithmetic constant of the 3DS AES hardware key scrambler (public hardware spec)
+        // Standard 128-bit arithmetic constant of the 3DS AES hardware key scrambler
         private static readonly UInt128 DefaultHardwareGeneratorConstant =
             new(0x1FF9E9AAC5FE0408UL, 0x024591DC5D52768AUL);
+
+        // Fixed system NCCH key (used when FixedCryptoKey flag 0x01 AND ProgramID category bit 0x10 are set)
+        private static readonly byte[] SystemFixedNcchKey =
+            Convert.FromHexString("527CE630A9CA305F3696F3CDE954194B");
+
+        // Standard retail eTicket Common Keys (CommonKeyIndex 0..5, Project_CTR pki/prod.h)
+        private static readonly byte[][] BuiltInRetailCommonKeys =
+        {
+            Convert.FromHexString("64C5FD55DD3AD988325BAAEC5243DB98"), // [0] eShop / .piratelegit.cia
+            Convert.FromHexString("4AAA3D0E27D4D728D0B1B433F0F9CBC8"), // [1] System
+            Convert.FromHexString("FBB0EF8CDBB0D8E453CD99344371697F"), // [2]
+            Convert.FromHexString("25959B7AD0409F72684198BA2ECD7DC6"), // [3]
+            Convert.FromHexString("7ADA22CAFFC476CC8297A0C7CEEEEEBE"), // [4]
+            Convert.FromHexString("A5051CA1B37DCF3AFBCF8CC1EDD9CE02")  // [5]
+        };
+
+        // Standard retail NCCH KeyX slots (0x2C Original, 0x25 7.x, 0x18 9.3 New3DS, 0x1B 9.6 New3DS)
+        private static readonly (int Slot, byte[] KeyX)[] BuiltInRetailNcchKeyXSlots =
+        {
+            (0x2C, Convert.FromHexString("B98E95CECA3E4D171F76A94DE934C053")),
+            (0x25, Convert.FromHexString("CEE7D8AB30C00DAE850EF5E382AC5AF3")),
+            (0x18, Convert.FromHexString("82E9C9BEBFB8BDB875ECC0A07D474374")),
+            (0x1B, Convert.FromHexString("45AD04953992C7C893724A9A7BCE6182"))
+        };
 
         private readonly Dictionary<int, byte[]> _commonKeys = new();
         private readonly Dictionary<int, byte[]> _slotKeyX = new();
@@ -28,9 +58,23 @@ namespace Lynx.Core.RomFs.Cia
         public string LoadedSeedDbPath { get; private set; } = string.Empty;
         public bool HasAnyKeys => _commonKeys.Count > 0 || _slotKeyX.Count > 0;
 
+        public void RegisterBuiltInRetailKeys()
+        {
+            for (int i = 0; i < BuiltInRetailCommonKeys.Length; i++)
+            {
+                _commonKeys[i] = (byte[])BuiltInRetailCommonKeys[i].Clone();
+            }
+
+            foreach (var (slot, keyX) in BuiltInRetailNcchKeyXSlots)
+            {
+                _slotKeyX[slot] = (byte[])keyX.Clone();
+            }
+        }
+
         public static CtrKeyStore LoadAvailableLocalKeys(string explicitAesKeysPath = null)
         {
             var store = new CtrKeyStore();
+            store.RegisterBuiltInRetailKeys();
 
             string resolvedKeys = ResolveAesKeysFilePath(explicitAesKeysPath);
             if (!string.IsNullOrEmpty(resolvedKeys) && File.Exists(resolvedKeys))
@@ -129,6 +173,8 @@ namespace Lynx.Core.RomFs.Cia
 
         public void ParseAesKeysFile(string path)
         {
+            var explicitCommonKeysInFile = new HashSet<int>();
+
             foreach (string rawLine in File.ReadLines(path))
             {
                 string line = rawLine.Trim();
@@ -153,6 +199,7 @@ namespace Lynx.Core.RomFs.Cia
                          commonIdx >= 0 && commonIdx <= 5)
                 {
                     _commonKeys[commonIdx] = bytes16;
+                    explicitCommonKeysInFile.Add(commonIdx);
                 }
                 else if (keyName.StartsWith("slot0x3DKeyY", StringComparison.OrdinalIgnoreCase) &&
                          int.TryParse(keyName.AsSpan(12), out int yIdx) &&
@@ -171,12 +218,12 @@ namespace Lynx.Core.RomFs.Cia
                 }
             }
 
-            // Derive common0..5 from slot0x3DKeyX + slot0x3DKeyY0..5 if direct common keys were not listed
+            // Derive common0..5 from slot0x3DKeyX + slot0x3DKeyY0..5 (overriding defaults when explicitly supplied in keyfile!)
             if (_slotKeyX.TryGetValue(0x3D, out byte[] keyX3D))
             {
                 foreach (var kvp in _slot3DKeyY)
                 {
-                    if (!_commonKeys.ContainsKey(kvp.Key))
+                    if (!explicitCommonKeysInFile.Contains(kvp.Key))
                     {
                         _commonKeys[kvp.Key] = DeriveNormalKey(keyX3D, kvp.Value, _generatorConstant);
                     }
@@ -213,6 +260,13 @@ namespace Lynx.Core.RomFs.Cia
             if (keyX16 == null || keyX16.Length != 16)
                 throw new ArgumentException("KeyX must be 16 bytes.");
             _slotKeyX[slotId] = (byte[])keyX16.Clone();
+        }
+
+        public void RegisterSeedForTesting(ulong programId, byte[] seed16)
+        {
+            if (seed16 == null || seed16.Length != 16)
+                throw new ArgumentException("Seed must be 16 bytes.");
+            _seedDb[programId] = (byte[])seed16.Clone();
         }
 
         public bool TryDecryptTicketTitleKey(
@@ -274,29 +328,25 @@ namespace Lynx.Core.RomFs.Cia
 
             if (fixedKey)
             {
-                // System fixed-key titles have category bit 0x10 set; standard fixed-key uses all-zero key
+                // System fixed-key titles have category bit 0x10 set; standard fixed-key uses all-zero key (GodMode9 ncch.c:152-160)
                 bool isSystemCategory = ((programId >> 32) & 0x10) != 0;
                 if (!isSystemCategory)
                 {
                     primaryKey = new byte[16];
                     secondaryKey = new byte[16];
-                    return true;
                 }
-
-                if (_slotKeyX.TryGetValue(0x2C, out byte[] sysKeyX))
+                else
                 {
-                    // System fixed key requires slot normal key; fallback if unavailable
-                    _ = sysKeyX;
+                    primaryKey = (byte[])SystemFixedNcchKey.Clone();
+                    secondaryKey = (byte[])SystemFixedNcchKey.Clone();
                 }
-                primaryKey = new byte[16];
-                secondaryKey = new byte[16];
                 return true;
             }
 
             if (!_slotKeyX.TryGetValue(0x2C, out byte[] keyX2C))
             {
                 failureReason =
-                    "Falta la clave 'slot0x2CKeyX' en aes_keys.txt para descifrar la capa NCCH retail (estándar de Inazuma Eleven GO V.0.0.0).";
+                    "Falta la clave 'slot0x2CKeyX' para descifrar la capa NCCH retail.";
                 return false;
             }
 
@@ -330,7 +380,7 @@ namespace Lynx.Core.RomFs.Cia
 
             if (secondarySlot < 0 || !_slotKeyX.TryGetValue(secondarySlot, out byte[] keyXSec))
             {
-                failureReason = $"Falta la clave 'slot0x{secondarySlot:X2}KeyX' en aes_keys.txt para descifrar el RomFS del NCCH.";
+                failureReason = $"No hay soporte o falta la clave 'slot0x{secondarySlot:X2}KeyX' (flags[3]=0x{flags3:X2}) para descifrar el RomFS del NCCH.";
                 return false;
             }
 
@@ -402,7 +452,8 @@ namespace Lynx.Core.RomFs.Cia
     }
 
     /// <summary>
-    /// Bounded, seekable read-only view over a slice of an underlying stream. Never disposes the parent stream unless requested.
+    /// Bounded, seekable read-only view over a slice of an underlying stream.
+    /// Avoids redundant <see cref="Stream.Seek"/> calls during sequential reads to keep OS/FileStream buffers hot.
     /// </summary>
     public sealed class SubReadStream : Stream
     {
@@ -441,8 +492,30 @@ namespace Lynx.Core.RomFs.Cia
                 return 0;
 
             int toRead = (int)Math.Min(count, _length - _position);
-            _baseStream.Seek(_baseOffset + _position, SeekOrigin.Begin);
+            long expectedBasePos = _baseOffset + _position;
+            if (_baseStream.Position != expectedBasePos)
+            {
+                _baseStream.Seek(expectedBasePos, SeekOrigin.Begin);
+            }
+
             int read = _baseStream.Read(buffer, offset, toRead);
+            _position += read;
+            return read;
+        }
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (buffer.Length == 0 || _position >= _length)
+                return 0;
+
+            int toRead = (int)Math.Min(buffer.Length, _length - _position);
+            long expectedBasePos = _baseOffset + _position;
+            if (_baseStream.Position != expectedBasePos)
+            {
+                _baseStream.Seek(expectedBasePos, SeekOrigin.Begin);
+            }
+
+            int read = _baseStream.Read(buffer.Slice(0, toRead));
             _position += read;
             return read;
         }
@@ -479,14 +552,22 @@ namespace Lynx.Core.RomFs.Cia
     }
 
     /// <summary>
-    /// O(1) random-access seekable AES-128-CBC decrypting stream for encrypted CIA content chunks.
-    /// Uses <c>IV_0 = [contentIndex_BE (2B), 0..0 (14B)]</c> for block 0 and <c>C_{k-1}</c> for block <c>k &gt; 0</c>.
+    /// High-throughput, zero-LOH, O(1) random-access seekable AES-128-CBC decrypting stream for encrypted CIA content chunks.
+    /// Uses <c>IV_0 = [contentIndex_BE (2B), 0..0 (14B)]</c> for block 0 and <c>C_{k-1}</c> for block <c>k &gt; 0</c>,
+    /// caching the last ciphertext block so sequential streaming across multi-GB <c>.piratelegit.cia</c> files performs zero backward seeks.
     /// </summary>
     public sealed class CiaAesCbcReadStream : Stream
     {
+        // Strictly below 85,000-byte .NET Large Object Heap threshold
+        private const int MaxBlocksPerBatch = 4096; // 65,536 bytes
+
         private readonly Stream _cipherStream;
         private readonly Aes _aes;
         private readonly byte[] _iv0 = new byte[16];
+        private readonly byte[] _cipherScratch = new byte[MaxBlocksPerBatch * 16];
+        private readonly byte[] _plainScratch = new byte[MaxBlocksPerBatch * 16];
+        private readonly byte[] _cachedLastCipher16 = new byte[16];
+        private long _cachedEndBlock = -1;
         private readonly bool _leaveOpen;
         private long _position;
 
@@ -521,42 +602,73 @@ namespace Lynx.Core.RomFs.Cia
 
         public override int Read(byte[] buffer, int offset, int count)
         {
-            if (count <= 0 || _position >= Length)
-                return 0;
-
-            int totalToRead = (int)Math.Min(count, Length - _position);
-            long startBlock = _position / 16;
-            long endBlockExclusive = (_position + totalToRead + 15) / 16;
-            int blockCount = (int)(endBlockExclusive - startBlock);
-
-            byte[] iv = new byte[16];
-            if (startBlock == 0)
-            {
-                Buffer.BlockCopy(_iv0, 0, iv, 0, 16);
-            }
-            else
-            {
-                _cipherStream.Seek((startBlock - 1) * 16, SeekOrigin.Begin);
-                ReadExact(_cipherStream, iv, 0, 16);
-            }
-
-            byte[] cipherChunk = new byte[blockCount * 16];
-            _cipherStream.Seek(startBlock * 16, SeekOrigin.Begin);
-            ReadExact(_cipherStream, cipherChunk, 0, cipherChunk.Length);
-
-            byte[] plainChunk = _aes.DecryptCbc(cipherChunk, iv, PaddingMode.None);
-            int intraBlockOffset = (int)(_position % 16);
-            Buffer.BlockCopy(plainChunk, intraBlockOffset, buffer, offset, totalToRead);
-            _position += totalToRead;
-            return totalToRead;
+            return Read(buffer.AsSpan(offset, count));
         }
 
-        private static void ReadExact(Stream s, byte[] buf, int off, int len)
+        public override int Read(Span<byte> destination)
+        {
+            if (destination.Length == 0 || _position >= Length)
+                return 0;
+
+            int remaining = (int)Math.Min(destination.Length, Length - _position);
+            int totalCopied = 0;
+            Span<byte> iv = stackalloc byte[16];
+
+            while (remaining > 0)
+            {
+                long startBlock = _position / 16;
+                int intraOffset = (int)(_position % 16);
+                long maxBytesThisBatch = (MaxBlocksPerBatch * 16L) - intraOffset;
+                int bytesToCopy = (int)Math.Min(remaining, maxBytesThisBatch);
+                long endBlockExclusive = (_position + bytesToCopy + 15) / 16;
+                int blockCount = (int)(endBlockExclusive - startBlock);
+                int cipherLen = blockCount * 16;
+
+                if (startBlock == 0)
+                {
+                    _iv0.AsSpan().CopyTo(iv);
+                }
+                else if (_cachedEndBlock == startBlock)
+                {
+                    _cachedLastCipher16.AsSpan().CopyTo(iv);
+                }
+                else
+                {
+                    long prevBlockOff = (startBlock - 1) * 16;
+                    if (_cipherStream.Position != prevBlockOff)
+                        _cipherStream.Seek(prevBlockOff, SeekOrigin.Begin);
+                    ReadExact(_cipherStream, iv);
+                }
+
+                long startByteOff = startBlock * 16;
+                if (_cipherStream.Position != startByteOff)
+                    _cipherStream.Seek(startByteOff, SeekOrigin.Begin);
+
+                Span<byte> cipherSpan = _cipherScratch.AsSpan(0, cipherLen);
+                Span<byte> plainSpan = _plainScratch.AsSpan(0, cipherLen);
+                ReadExact(_cipherStream, cipherSpan);
+
+                // Cache final ciphertext block for zero-seek continuation on next sequential Read()
+                cipherSpan.Slice(cipherLen - 16, 16).CopyTo(_cachedLastCipher16);
+                _cachedEndBlock = endBlockExclusive;
+
+                _aes.DecryptCbc(cipherSpan, iv, plainSpan, PaddingMode.None);
+                plainSpan.Slice(intraOffset, bytesToCopy).CopyTo(destination.Slice(totalCopied, bytesToCopy));
+
+                _position += bytesToCopy;
+                totalCopied += bytesToCopy;
+                remaining -= bytesToCopy;
+            }
+
+            return totalCopied;
+        }
+
+        private static void ReadExact(Stream s, Span<byte> buf)
         {
             int done = 0;
-            while (done < len)
+            while (done < buf.Length)
             {
-                int r = s.Read(buf, off + done, len - done);
+                int r = s.Read(buf.Slice(done));
                 if (r <= 0)
                     throw new EndOfStreamException("Unexpected EOF in encrypted CIA content stream.");
                 done += r;
@@ -595,21 +707,29 @@ namespace Lynx.Core.RomFs.Cia
     }
 
     /// <summary>
-    /// O(1) random-access seekable read-only stream that exposes any NCCH partition (Plain, FixedKey, or KeyX-encrypted)
-    /// as a clean plaintext NCCH with <c>NoCrypto (0x04)</c> set in <c>Flags[7]</c>.
+    /// High-throughput, zero-LOH, O(1) random-access seekable read-only stream that exposes any NCCH partition
+    /// (Plain, FixedKey, 7.x KeyX, or SeedCrypto) as a clean plaintext NCCH with <c>NoCrypto (0x04)</c> set in <c>Flags[7]</c>.
+    /// Implements exact <c>GodMode9</c> (<c>ncch.c:197-218</c>) ExeFS section vs. padding key selection.
     /// </summary>
     public sealed class NcchDecryptedReadStream : Stream
     {
+        private const int MaxBlocksPerBatch = 4096; // 65,536 bytes (< 85 KB LOH threshold)
+
         private sealed record CtrRegion(long Start, long Length, long CtrOrigin, Aes KeyAes, UInt128 BaseCounter);
 
         private readonly Stream _rawNcch;
+        private readonly byte[] _originalHeader512 = new byte[0x200];
         private readonly byte[] _patchedHeader512 = new byte[0x200];
+        private readonly byte[] _ctrScratch = new byte[MaxBlocksPerBatch * 16];
+        private readonly byte[] _ksScratch = new byte[MaxBlocksPerBatch * 16];
         private readonly Aes _primaryAes;
         private readonly Aes _secondaryAes;
         private readonly List<CtrRegion> _regions = new();
         private readonly bool _isEncrypted;
         private readonly bool _leaveOpen;
         private long _position;
+
+        public ReadOnlySpan<byte> OriginalHeader512 => _originalHeader512;
 
         public NcchDecryptedReadStream(Stream rawNcchStream, byte[] primaryKey16, byte[] secondaryKey16, bool leaveOpen = true)
         {
@@ -620,11 +740,13 @@ namespace Lynx.Core.RomFs.Cia
             int hdrRead = 0;
             while (hdrRead < 0x200)
             {
-                int r = _rawNcch.Read(_patchedHeader512, hdrRead, 0x200 - hdrRead);
+                int r = _rawNcch.Read(_originalHeader512, hdrRead, 0x200 - hdrRead);
                 if (r <= 0)
                     throw new EndOfStreamException("Truncated NCCH header.");
                 hdrRead += r;
             }
+
+            Buffer.BlockCopy(_originalHeader512, 0, _patchedHeader512, 0, 0x200);
 
             uint magic = BinaryPrimitives.ReadUInt32LittleEndian(_patchedHeader512.AsSpan(0x100, 4));
             if (magic != CiaConstants.NcchMagic)
@@ -643,10 +765,12 @@ namespace Lynx.Core.RomFs.Cia
             _primaryAes = Aes.Create();
             _primaryAes.KeySize = 128;
             _primaryAes.Key = (byte[])primaryKey16.Clone();
+            _primaryAes.Padding = PaddingMode.None;
 
             _secondaryAes = Aes.Create();
             _secondaryAes.KeySize = 128;
             _secondaryAes.Key = (byte[])secondaryKey16.Clone();
+            _secondaryAes.Padding = PaddingMode.None;
 
             ushort version = BinaryPrimitives.ReadUInt16LittleEndian(_patchedHeader512.AsSpan(0x112, 2));
             ulong partitionIdLe = BinaryPrimitives.ReadUInt64LittleEndian(_patchedHeader512.AsSpan(0x108, 8));
@@ -668,13 +792,15 @@ namespace Lynx.Core.RomFs.Cia
 
             if (exefsSize >= 0x200)
             {
-                // ExeFS 0x200-byte header is always encrypted with primaryKey
-                _regions.Add(new CtrRegion(exefsOffset, 0x200, exefsOffset, _primaryAes, exefsCtr));
-
-                // Decrypt the 0x200-byte ExeFS header now to distinguish 'icon'/'banner' (primaryKey) vs '.code' (secondaryKey)
+                // Per GodMode9 (ncch.c:197-218):
+                // - ExeFS 0x200-byte header uses primaryKey (key0)
+                // - 'icon' and 'banner' use primaryKey (key0); other files ('.code', 'logo') use secondaryKey (key1) for [0 .. file.size)
+                // - Any media-unit tail padding [file.size .. align(file.size, 0x200)) and inter-section/trailing ExeFS padding uses primaryKey (key0)
+                var headerReg = new CtrRegion(exefsOffset, 0x200, exefsOffset, _primaryAes, exefsCtr);
                 byte[] plainExeFsHdr = new byte[0x200];
-                ReadRegionPlaintext(_regions[^1], exefsOffset, plainExeFsHdr, 0, 0x200);
+                ReadRegionPlaintext(headerReg, exefsOffset, plainExeFsHdr.AsSpan(0, 0x200));
 
+                var secondarySpans = new List<(long Start, long End)>();
                 for (int i = 0; i < 10; i++)
                 {
                     int entryPos = i * 0x10;
@@ -686,9 +812,33 @@ namespace Lynx.Core.RomFs.Cia
 
                     bool usePrimary = secName.Equals("icon", StringComparison.Ordinal) ||
                                       secName.Equals("banner", StringComparison.Ordinal);
-                    long absStart = exefsOffset + 0x200 + secRelOff;
-                    long alignedLen = CiaConstants.AlignUp(secSize, CiaConstants.NcchMediaUnitSize);
-                    _regions.Add(new CtrRegion(absStart, alignedLen, exefsOffset, usePrimary ? _primaryAes : _secondaryAes, exefsCtr));
+                    if (!usePrimary)
+                    {
+                        long secAbsStart = exefsOffset + 0x200 + secRelOff;
+                        long secAbsEnd = Math.Min(exefsOffset + exefsSize, secAbsStart + secSize);
+                        if (secAbsEnd > secAbsStart)
+                            secondarySpans.Add((secAbsStart, secAbsEnd));
+                    }
+                }
+
+                secondarySpans.Sort((a, b) => a.Start.CompareTo(b.Start));
+                long cursor = exefsOffset;
+                long exefsEnd = exefsOffset + exefsSize;
+                foreach (var (sStart, sEnd) in secondarySpans)
+                {
+                    if (sStart > cursor)
+                    {
+                        _regions.Add(new CtrRegion(cursor, sStart - cursor, exefsOffset, _primaryAes, exefsCtr));
+                    }
+                    if (sEnd > sStart)
+                    {
+                        _regions.Add(new CtrRegion(sStart, sEnd - sStart, exefsOffset, _secondaryAes, exefsCtr));
+                        cursor = sEnd;
+                    }
+                }
+                if (cursor < exefsEnd)
+                {
+                    _regions.Add(new CtrRegion(cursor, exefsEnd - cursor, exefsOffset, _primaryAes, exefsCtr));
                 }
             }
 
@@ -731,10 +881,15 @@ namespace Lynx.Core.RomFs.Cia
 
         public override int Read(byte[] buffer, int offset, int count)
         {
-            if (count <= 0 || _position >= Length)
+            return Read(buffer.AsSpan(offset, count));
+        }
+
+        public override int Read(Span<byte> destination)
+        {
+            if (destination.Length == 0 || _position >= Length)
                 return 0;
 
-            int remaining = (int)Math.Min(count, Length - _position);
+            int remaining = (int)Math.Min(destination.Length, Length - _position);
             int totalRead = 0;
 
             while (remaining > 0)
@@ -742,7 +897,7 @@ namespace Lynx.Core.RomFs.Cia
                 if (_position < 0x200)
                 {
                     int hdrTake = (int)Math.Min(remaining, 0x200 - _position);
-                    Buffer.BlockCopy(_patchedHeader512, (int)_position, buffer, offset + totalRead, hdrTake);
+                    _patchedHeader512.AsSpan((int)_position, hdrTake).CopyTo(destination.Slice(totalRead, hdrTake));
                     _position += hdrTake;
                     totalRead += hdrTake;
                     remaining -= hdrTake;
@@ -751,8 +906,9 @@ namespace Lynx.Core.RomFs.Cia
 
                 if (!_isEncrypted)
                 {
-                    _rawNcch.Seek(_position, SeekOrigin.Begin);
-                    int r = _rawNcch.Read(buffer, offset + totalRead, remaining);
+                    if (_rawNcch.Position != _position)
+                        _rawNcch.Seek(_position, SeekOrigin.Begin);
+                    int r = _rawNcch.Read(destination.Slice(totalRead, remaining));
                     if (r <= 0)
                         break;
                     _position += r;
@@ -779,8 +935,9 @@ namespace Lynx.Core.RomFs.Cia
                 if (active == null)
                 {
                     int plainTake = (int)Math.Min(remaining, nextRegionStart - _position);
-                    _rawNcch.Seek(_position, SeekOrigin.Begin);
-                    int r = _rawNcch.Read(buffer, offset + totalRead, plainTake);
+                    if (_rawNcch.Position != _position)
+                        _rawNcch.Seek(_position, SeekOrigin.Begin);
+                    int r = _rawNcch.Read(destination.Slice(totalRead, plainTake));
                     if (r <= 0)
                         break;
                     _position += r;
@@ -790,7 +947,7 @@ namespace Lynx.Core.RomFs.Cia
                 else
                 {
                     int cryptoTake = (int)Math.Min(remaining, (active.Start + active.Length) - _position);
-                    ReadRegionPlaintext(active, _position, buffer, offset + totalRead, cryptoTake);
+                    ReadRegionPlaintext(active, _position, destination.Slice(totalRead, cryptoTake));
                     _position += cryptoTake;
                     totalRead += cryptoTake;
                     remaining -= cryptoTake;
@@ -800,35 +957,51 @@ namespace Lynx.Core.RomFs.Cia
             return totalRead;
         }
 
-        private void ReadRegionPlaintext(CtrRegion reg, long absPos, byte[] dest, int destOffset, int len)
+        private void ReadRegionPlaintext(CtrRegion reg, long absPos, Span<byte> dest)
         {
-            _rawNcch.Seek(absPos, SeekOrigin.Begin);
+            if (_rawNcch.Position != absPos)
+                _rawNcch.Seek(absPos, SeekOrigin.Begin);
+
             int read = 0;
-            while (read < len)
+            while (read < dest.Length)
             {
-                int r = _rawNcch.Read(dest, destOffset + read, len - read);
+                int r = _rawNcch.Read(dest.Slice(read));
                 if (r <= 0)
                     throw new EndOfStreamException("Unexpected EOF inside encrypted NCCH region.");
                 read += r;
             }
 
-            long relPos = absPos - reg.CtrOrigin;
-            long firstBlock = relPos / 16;
-            long lastBlockExclusive = (relPos + len + 15) / 16;
-            int blockCount = (int)(lastBlockExclusive - firstBlock);
-
-            byte[] counterBlocks = new byte[blockCount * 16];
-            for (int b = 0; b < blockCount; b++)
+            int posInDest = 0;
+            while (posInDest < dest.Length)
             {
-                UInt128 ctrVal = unchecked(reg.BaseCounter + (UInt128)(ulong)(firstBlock + b));
-                CtrKeyStore.WriteUInt128BigEndian(counterBlocks.AsSpan(b * 16, 16), ctrVal);
-            }
+                long curAbs = absPos + posInDest;
+                long relPos = curAbs - reg.CtrOrigin;
+                long firstBlock = relPos / 16;
+                int intraOffset = (int)(relPos % 16);
+                long maxTake = (MaxBlocksPerBatch * 16L) - intraOffset;
+                int take = (int)Math.Min(dest.Length - posInDest, maxTake);
+                long lastBlockExclusive = (relPos + take + 15) / 16;
+                int blockCount = (int)(lastBlockExclusive - firstBlock);
 
-            byte[] keystream = reg.KeyAes.EncryptEcb(counterBlocks, PaddingMode.None);
-            int intraOffset = (int)(relPos % 16);
-            for (int i = 0; i < len; i++)
-            {
-                dest[destOffset + i] ^= keystream[intraOffset + i];
+                Span<byte> ctrSpan = _ctrScratch.AsSpan(0, blockCount * 16);
+                Span<byte> ksSpan = _ksScratch.AsSpan(0, blockCount * 16);
+
+                for (int b = 0; b < blockCount; b++)
+                {
+                    UInt128 ctrVal = unchecked(reg.BaseCounter + (UInt128)(ulong)(firstBlock + b));
+                    CtrKeyStore.WriteUInt128BigEndian(ctrSpan.Slice(b * 16, 16), ctrVal);
+                }
+
+                reg.KeyAes.EncryptEcb(ctrSpan, ksSpan, PaddingMode.None);
+
+                Span<byte> targetSlice = dest.Slice(posInDest, take);
+                ReadOnlySpan<byte> ksSlice = ksSpan.Slice(intraOffset, take);
+                for (int i = 0; i < take; i++)
+                {
+                    targetSlice[i] ^= ksSlice[i];
+                }
+
+                posInDest += take;
             }
         }
 

@@ -176,9 +176,17 @@ namespace Lynx.Core.RomFs.Cia
                 f.MetaByteOffset = fileMetaCursor;
                 fileMetaCursor += 0x20u + (uint)CiaConstants.AlignUp(f.NameUtf16Bytes.Length, 4);
 
-                fileDataCursor = CiaConstants.AlignUp(fileDataCursor, CiaConstants.RomFsFileDataAlignment);
-                f.DataRelativeOffset = (ulong)fileDataCursor;
-                fileDataCursor += f.Spec.Length;
+                if (f.Spec.Length > 0)
+                {
+                    fileDataCursor = CiaConstants.AlignUp(fileDataCursor, CiaConstants.RomFsFileDataAlignment);
+                    f.DataRelativeOffset = (ulong)fileDataCursor;
+                    fileDataCursor += f.Spec.Length;
+                }
+                else
+                {
+                    // Per Nintendo makerom (romfs_gen.c:276), empty files store dataoffset = 0 without advancing u_dataLen
+                    f.DataRelativeOffset = 0;
+                }
             }
 
             // Link sibling / first-child pointers
@@ -314,6 +322,9 @@ namespace Lynx.Core.RomFs.Cia
 
                 foreach (var f in allFiles)
                 {
+                    if (f.Spec.Length == 0)
+                        continue;
+
                     long padNeeded = (long)f.DataRelativeOffset - currentDataWritten;
                     while (padNeeded > 0)
                     {

@@ -61,7 +61,8 @@ namespace Lynx.Core.RomFs
             GameEdition requestedEdition = GameEdition.Auto,
             string preferredLanguageCode = null,
             bool computeSourceSha256 = true,
-            string aesKeysPath = null)
+            string aesKeysPath = null,
+            string precomputedSourceSha256 = null)
         {
             if (string.IsNullOrWhiteSpace(inputPath))
                 throw new ArgumentException("La ruta de entrada no puede estar vacía.", nameof(inputPath));
@@ -105,7 +106,9 @@ namespace Lynx.Core.RomFs
                 throw new FileNotFoundException($"No existe el archivo o carpeta de entrada '{fullInput}'.", fullInput);
             }
 
-            var (sourceSha, sourceLen) = InspectFileIntegrity(fullInput, computeSourceSha256);
+            var (sourceSha, sourceLen) = !string.IsNullOrWhiteSpace(precomputedSourceSha256)
+                ? (precomputedSourceSha256, new FileInfo(fullInput).Length)
+                : InspectFileIntegrity(fullInput, computeSourceSha256);
 
             // Case 1b: Nintendo 3DS .cia archive -> extract ie_a.fa cleanly into isolated temp folder
             if (IsLikelyCiaArchive(fullInput))

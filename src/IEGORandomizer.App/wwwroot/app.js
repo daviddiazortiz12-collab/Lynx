@@ -422,7 +422,9 @@
         body: JSON.stringify({
           inputPath,
           edition: $("editionSelect").value,
-          targetOutputOrCitraDir: $("outputDir").value.trim() || $("citraModsRootInput").value.trim()
+          targetOutputOrCitraDir: activeWorkflowMode === "classic"
+            ? ($("outputDir").value.trim() || $("citraModsRootInput").value.trim())
+            : ($("outputCiaPath").value.trim() || $("citraModsRootInput").value.trim())
         })
       });
       const data = await res.json();

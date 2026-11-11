@@ -261,19 +261,19 @@ namespace IEGORandomizer.App
 
         public static void PrintHelp()
         {
-            Console.WriteLine("Uso (IEGO Randomizer v1.1.0):");
+            Console.WriteLine("Uso (IEGO Randomizer v1.1.1 — Edición Nintendo 2DS/3DS & PC):");
             Console.WriteLine("  IEGORandomizer                                                         Inicia la interfaz gráfica de escritorio (PC)");
-            Console.WriteLine("  IEGORandomizer -i <original.cia> --output-cia <nuevo.cia> [opciones]   Modo Principal: .cia -> randomizar -> nuevo .cia");
+            Console.WriteLine("  IEGORandomizer -i <original.cia> --output-cia <nuevo.cia> [opciones]   Modo Principal: .cia/.piratelegit.cia -> randomizar -> nuevo .cia");
             Console.WriteLine("  IEGORandomizer --merge-cia <original.cia> --romfs <dir> --output-cia <nuevo.cia>  Segundo Modo: .cia + carpeta RomFS -> nuevo .cia");
             Console.WriteLine("  IEGORandomizer --inspect-cia <original.cia> [--export-diag <out.json>] Inspección local de solo lectura del .cia");
             Console.WriteLine("  IEGORandomizer --cli -i <entrada> -o <carpeta_salida> [opciones]       Modo Clásico v1.0.2 (LayeredFS / Citra / Luma)");
             Console.WriteLine("  IEGORandomizer --diagnose -i <entrada> [-o <carpeta_salida_o_citra>] [--json]");
             Console.WriteLine();
             Console.WriteLine("Opciones CLI:");
-            Console.WriteLine("  -i, --input <ruta>           Ruta al archivo .cia, .3ds desencriptado, carpeta RomFS o ie_a.fa");
-            Console.WriteLine("  --output-cia <nuevo.cia>     Ruta del nuevo archivo .cia verificado de salida");
+            Console.WriteLine("  -i, --input <ruta>           Ruta al archivo .cia / .piratelegit.cia, .3ds desencriptado, carpeta RomFS o ie_a.fa");
+            Console.WriteLine("  --output-cia <nuevo.cia>     Ruta del nuevo archivo .cia verificado de salida (listo para FBI en 2DS/3DS)");
             Console.WriteLine("  --romfs <carpeta_romfs>      Carpeta RomFS modificada cuyos archivos se fusionarán en el .cia");
-            Console.WriteLine("  --aes-keys <aes_keys.txt>    Ruta opcional a aes_keys.txt local si el .cia está cifrado");
+            Console.WriteLine("  --aes-keys <aes_keys.txt>    Opcional: aes_keys.txt personalizado (los .cia/.piratelegit.cia retail funcionan sin él)");
             Console.WriteLine("  -o, --output <carpeta>       Carpeta de destino separada (modo clásico LayeredFS)");
             Console.WriteLine("  -s, --seed <texto>           Semilla manual reproducible (opcional)");
             Console.WriteLine("  -e, --edition <modo>         auto | luz | sombra");
@@ -301,7 +301,7 @@ namespace IEGORandomizer.App
                 }
 
                 Console.WriteLine("================================================================");
-                Console.WriteLine("  IEGO RANDOMIZER v1.1.0 — INSPECCIÓN LOCAL .CIA (SOLO LECTURA)");
+                Console.WriteLine("  IEGO RANDOMIZER v1.1.1 — INSPECCIÓN LOCAL .CIA (SOLO LECTURA)");
                 Console.WriteLine("================================================================");
                 Console.WriteLine($"  Archivo analizado : {rep.FilePath} ({rep.FileSizeBytes:N0} B)");
                 Console.WriteLine($"  SHA-256 original  : {rep.Sha256Hex}");
@@ -339,7 +339,7 @@ namespace IEGORandomizer.App
             try
             {
                 Console.WriteLine("================================================================");
-                Console.WriteLine("  IEGO RANDOMIZER v1.1.0 — MODO PRINCIPAL (.CIA -> NUEVO .CIA)");
+                Console.WriteLine("  IEGO RANDOMIZER v1.1.1 — MODO PRINCIPAL (.CIA -> NUEVO .CIA)");
                 Console.WriteLine("================================================================");
 
                 var svc = new CiaWorkflowService();
@@ -392,7 +392,7 @@ namespace IEGORandomizer.App
             try
             {
                 Console.WriteLine("================================================================");
-                Console.WriteLine("  IEGO RANDOMIZER v1.1.0 — MODO 2 (.CIA + ROMFS -> NUEVO .CIA)");
+                Console.WriteLine("  IEGO RANDOMIZER v1.1.1 — MODO 2 (.CIA + ROMFS -> NUEVO .CIA)");
                 Console.WriteLine("================================================================");
 
                 var svc = new CiaWorkflowService();

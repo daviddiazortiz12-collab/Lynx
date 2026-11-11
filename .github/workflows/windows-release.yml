@@ -34,15 +34,15 @@ jobs:
         run: |
           dotnet nuget add source https://api.nuget.org/v3/index.json --name nuget.org --configfile NuGet.Config
 
-      - name: Run All 23 Automated Integrity, Engine & CIA Pipeline Tests on Windows x64
+      - name: Run All Automated Integrity, Engine, PirateLegit CIA & 2DS Hardware Verification Tests on Windows x64
         shell: pwsh
         run: |
           dotnet run --project tests/IEGORandomizer.Tests/IEGORandomizer.Tests.csproj --configuration Release
 
-      - name: Publish Standalone Self-Contained Windows x64 Executable (.exe) v1.1.0
+      - name: Publish Standalone Self-Contained Windows x64 Executable (.exe) v1.1.1
         shell: pwsh
         run: |
-          $outDir = "publish_win64/IEGORandomizer-v1.1.0-Windows-x64"
+          $outDir = "publish_win64/IEGORandomizer-v1.1.1-Windows-x64"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
           dotnet publish src/IEGORandomizer.App/IEGORandomizer.App.csproj `
@@ -64,15 +64,15 @@ jobs:
 
           Copy-Item "src/IEGORandomizer.App/Packaging/LEEME_INSTRUCCIONES_FACILES_v1.1.0.txt" "$outDir/LEEME_INSTRUCCIONES_FACILES.txt"
 
-          Write-Host "Published v1.1.0 directory contents:"
+          Write-Host "Published v1.1.1 directory contents:"
           Get-ChildItem -Path $outDir | Format-Table Name, Length -AutoSize
 
       - name: Verify Isolated Single-File .exe Startup, CLI Modes & HTTP Endpoints on Windows
         shell: pwsh
         run: |
-          $isoDir = Join-Path $env:RUNNER_TEMP "isolated_exe_verify_v110"
+          $isoDir = Join-Path $env:RUNNER_TEMP "isolated_exe_verify_v111"
           New-Item -ItemType Directory -Force -Path $isoDir | Out-Null
-          Copy-Item "publish_win64/IEGORandomizer-v1.1.0-Windows-x64/IEGORandomizer.exe" "$isoDir/IEGORandomizer.exe"
+          Copy-Item "publish_win64/IEGORandomizer-v1.1.1-Windows-x64/IEGORandomizer.exe" "$isoDir/IEGORandomizer.exe"
 
           # 1. Verify CLI help boots cleanly without external DLLs or .NET lookup
           $env:DOTNET_MULTILEVEL_LOOKUP = "0"
@@ -93,7 +93,7 @@ jobs:
               Start-Sleep -Milliseconds 500
               try {
                 $health = Invoke-RestMethod -Uri "http://127.0.0.1:5189/api/health" -TimeoutSec 2
-                if ($health.status -eq "ok" -and $health.version -eq "1.1.0") {
+                if ($health.status -eq "ok" -and $health.version -eq "1.1.1") {
                   $ready = $true
                   break
                 }
@@ -101,12 +101,12 @@ jobs:
             }
 
             if (-not $ready) {
-              throw "IEGORandomizer.exe v1.1.0 failed to respond on http://127.0.0.1:5189/api/health"
+              throw "IEGORandomizer.exe v1.1.1 failed to respond on http://127.0.0.1:5189/api/health"
             }
 
             $indexResp = Invoke-WebRequest -Uri "http://127.0.0.1:5189/" -UseBasicParsing
-            if ($indexResp.StatusCode -ne 200 -or $indexResp.Content -notmatch "v1.1.0") {
-              throw "Embedded v1.1.0 index.html check failed."
+            if ($indexResp.StatusCode -ne 200 -or $indexResp.Content -notmatch "v1.1.1") {
+              throw "Embedded v1.1.1 index.html check failed."
             }
 
             $jsResp = Invoke-WebRequest -Uri "http://127.0.0.1:5189/app.js" -UseBasicParsing
@@ -122,7 +122,7 @@ jobs:
             }
           }
 
-      - name: Package v1.1.0 ZIP (Preserving v1.0.2 Intact), Create v1.1.0-win64 Release & Sync to Branch
+      - name: Package v1.1.1 ZIP (Preserving v1.0.2 & v1.1.0 Intact), Create v1.1.1-win64 Release & Record Checksums
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -132,40 +132,39 @@ jobs:
             throw "Safety check failed: original v1.0.2 release/IEGORandomizer-Windows-x64.zip must remain intact!"
           }
 
-          $v110Dir = "release/v1.1.0"
-          New-Item -ItemType Directory -Force -Path $v110Dir | Out-Null
-          $zipPath = "$v110Dir/IEGORandomizer-v1.1.0-Windows-x64.zip"
+          $v111Dir = "release/v1.1.1"
+          New-Item -ItemType Directory -Force -Path $v111Dir | Out-Null
+          $zipPath = Join-Path $env:RUNNER_TEMP "IEGORandomizer-v1.1.1-Windows-x64.zip"
           if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
 
-          Compress-Archive -Path "publish_win64/IEGORandomizer-v1.1.0-Windows-x64/*" -DestinationPath $zipPath -CompressionLevel Optimal
+          Compress-Archive -Path "publish_win64/IEGORandomizer-v1.1.1-Windows-x64/*" -DestinationPath $zipPath -CompressionLevel Optimal
 
-          $exeHash = (Get-FileHash "publish_win64/IEGORandomizer-v1.1.0-Windows-x64/IEGORandomizer.exe" -Algorithm SHA256).Hash
+          $exeHash = (Get-FileHash "publish_win64/IEGORandomizer-v1.1.1-Windows-x64/IEGORandomizer.exe" -Algorithm SHA256).Hash
           $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
           $zipSizeMb = [math]::Round((Get-Item $zipPath).Length / 1MB, 2)
 
           @(
-            "$zipHash  IEGORandomizer-v1.1.0-Windows-x64.zip ($zipSizeMb MB)"
-            "$exeHash  IEGORandomizer.exe (v1.1.0)"
-          ) | Set-Content -Path "$v110Dir/SHA256SUMS.txt" -Encoding UTF8
+            "$zipHash  IEGORandomizer-v1.1.1-Windows-x64.zip ($zipSizeMb MB)"
+            "$exeHash  IEGORandomizer.exe (v1.1.1)"
+          ) | Set-Content -Path "$v111Dir/SHA256SUMS.txt" -Encoding UTF8
 
           Write-Host "Packaged $zipPath ($zipSizeMb MB) - SHA256: $zipHash"
 
-          # Create or update separate GitHub Release v1.1.0-win64 (NEVER touching v1.0.2-win64!)
-          $tagName = "v1.1.0-win64"
+          # Create or update separate GitHub Release v1.1.1-win64 (preserving v1.0.2-win64 & v1.1.0-win64 untouched!)
+          $tagName = "v1.1.1-win64"
           $existing = gh release view $tagName 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tagName $zipPath "$v110Dir/SHA256SUMS.txt" --clobber
+            gh release upload $tagName $zipPath "$v111Dir/SHA256SUMS.txt" --clobber
           } else {
-            gh release create $tagName $zipPath "$v110Dir/SHA256SUMS.txt" `
+            gh release create $tagName $zipPath "$v111Dir/SHA256SUMS.txt" `
               --target arena/799dcf14-lynx `
-              --title "IEGO Randomizer v1.1.0 (Windows x64 — Flujo Nativo .CIA -> .CIA, Fusión .CIA + RomFS e Inspección Local V.0.0.0)" `
-              --notes "Versión ejecutable independiente (self-contained) v1.1.0 para Windows 10/11 (64 bits), conservando intacta v1.0.2-win64. Añade: (1) Modo Principal: seleccionar .cia original local (compatible con Inazuma Eleven GO Luz V.0.0.0 y Sombra) -> randomizar con los 5 módulos de v1.0.2 -> generar nuevo .cia verificado en frío; (2) Segundo Modo: combinar .cia original + cualquier carpeta RomFS ya modificada (incorporando TODOS sus archivos sobre el 100% de la RomFS original) -> generar nuevo .cia verificado; (3) Inspección local de solo lectura de cabeceras CIA/TMD/Ticket/NCCH/IVFC y exportación opcional de informe JSON libre de datos de ROM; (4) Preservación íntegra del modo clásico v1.0.2 (LayeredFS / Citra / Azahar / Luma3DS)."
+              --title "IEGO Randomizer v1.1.1 (Windows x64 — Soporte Integrado .piratelegit.cia y Compatibilidad Real Nintendo 2DS / 3DS)" `
+              --notes "Versión ejecutable independiente (self-contained) v1.1.1 para Windows 10/11 (64 bits), conservando intacta la versión clásica v1.0.2-win64. Novedades clave en v1.1.1: (1) Soporte automático integrado para contenedores cifrados eShop / .piratelegit.cia (AES-128-CBC CommonKey 0..5 + NCCH 0x2C/0x25/0x18/0x1B/Fixed) SIN requerir aes_keys.txt externo; (2) Preservación exacta del tamaño descomprimido TableChunkSize en Level-5 ARC0 (ie_a.fa) para evitar desbordamientos de memoria ARM11 en consolas Nintendo 2DS / 3DS reales; (3) Bandera ExHeader SDApplication, hashes SHA-256 exactos de secciones ExeFS (.code/icon/banner) y normalización canónica de rutas UTF-16LE case-sensitive para instalación directa mediante FBI + Luma3DS en Nintendo 2DS; (4) Preservación del 100% de archivos RomFS y los 5 módulos de randomización."
           }
 
           git checkout -- NuGet.Config
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f "$v110Dir/IEGORandomizer-v1.1.0-Windows-x64.zip" "$v110Dir/SHA256SUMS.txt"
-          git commit -m "chore(release): add Windows x64 self-contained package v1.1.0 alongside v1.0.2 [skip ci]"
-          git push origin HEAD:arena/799dcf14-lynx
+          git add -f "$v111Dir/SHA256SUMS.txt"
+          git diff --cached --quiet || (git commit -m "chore(release): record Windows x64 self-contained v1.1.1 release checksums [skip ci]" && git push origin HEAD:arena/799dcf14-lynx)

@@ -165,6 +165,18 @@ namespace Lynx.Core.RomFs.Cia
             }
 
             // 5. Inspect Content 0 (Main CXI) and classify encryption layers
+            foreach (var presentChunk in chunks.Where(c => c.IsPresentInCia))
+            {
+                if (presentChunk.CiaFileOffset < 0 || presentChunk.CiaFileOffset + presentChunk.SizeBytes > fs.Length)
+                {
+                    report.IsValidCiaStructure = false;
+                    report.CanProcessNow = false;
+                    report.LimitationsAndWarnings.Add(
+                        $"El contenido #{presentChunk.ContentIndex} excede el tamaño real del archivo .cia (descarga incompleta o archivo truncado).");
+                    return report;
+                }
+            }
+
             var mainChunk = chunks.FirstOrDefault(c => c.ContentIndex == 0 && c.IsPresentInCia);
             if (mainChunk == null)
             {
@@ -195,11 +207,11 @@ namespace Lynx.Core.RomFs.Cia
                     {
                         report.CanProcessNow = false;
                         report.LimitationsAndWarnings.Add(
-                            $"El contenedor .cia tiene cifrado externo AES-128-CBC (CommonKeyIndex={commonKeyIdx}). Para procesarlo directamente coloca tu 'aes_keys.txt' local (con common{commonKeyIdx} o slot0x3D) o descífralo en GodMode9 / Citra / Azahar.");
+                            $"El contenedor .cia tiene cifrado externo AES-128-CBC (CommonKeyIndex={commonKeyIdx}) y no hay clave disponible para ese índice.");
                         return report;
                     }
 
-                    report.UsedExternalAesKeys = true;
+                    report.UsedExternalAesKeys = !string.IsNullOrEmpty(keyStore.LoadedAesKeysPath);
                     ncchRawStream = new CiaAesCbcReadStream(ciaLayerStream, decTitleKey, mainChunk.ContentIndex, leaveOpen: true);
                 }
 
@@ -264,21 +276,52 @@ namespace Lynx.Core.RomFs.Cia
                     return report;
                 }
 
-                if (!noCrypto && !fixedKey)
+                if (!noCrypto && !fixedKey && !string.IsNullOrEmpty(keyStore.LoadedAesKeysPath))
                 {
                     report.UsedExternalAesKeys = true;
                 }
 
                 using var plainNcch = new NcchDecryptedReadStream(ncchRawStream, primaryKey, secondaryKey, leaveOpen: true);
 
-                // Check ExHeader remaster version
+                // Cryptographically verify ExHeader & ExeFS superblock hashes against original NCCH header
                 uint exHdrDataSize = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr.AsSpan(0x180, 4));
-                if (exHdrDataSize >= 0x10 && plainNcch.Length >= 0x600)
+                if (exHdrDataSize >= 0x400 && plainNcch.Length >= 0x600)
+                {
+                    byte[] exHdr400 = ReadBytesAt(plainNcch, 0x200, 0x400);
+                    Span<byte> actualExHash = stackalloc byte[32];
+                    SHA256.HashData(exHdr400, actualExHash);
+                    if (!actualExHash.SequenceEqual(ncchHdr.AsSpan(0x160, 0x20)))
+                    {
+                        report.CanProcessNow = false;
+                        report.LimitationsAndWarnings.Add(
+                            "El hash SHA-256 del ExHeader descifrado no coincide con la cabecera NCCH (posible TitleKey/clave incorrecta o archivo .cia dañado).");
+                        return report;
+                    }
+
+                    report.ExHeaderRemasterVersion = BinaryPrimitives.ReadUInt16LittleEndian(exHdr400.AsSpan(0x0E, 2));
+                }
+                else if (exHdrDataSize >= 0x10 && plainNcch.Length >= 0x600)
                 {
                     Span<byte> exHdrHead = stackalloc byte[0x10];
                     plainNcch.Seek(0x200, SeekOrigin.Begin);
                     ReadExact(plainNcch, exHdrHead);
                     report.ExHeaderRemasterVersion = BinaryPrimitives.ReadUInt16LittleEndian(exHdrHead.Slice(0x0E, 2));
+                }
+
+                long exefsOffCheck = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr.AsSpan(0x1A0, 4)) * CiaConstants.NcchMediaUnitSize;
+                long exefsHashLenCheck = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr.AsSpan(0x1A8, 4)) * CiaConstants.NcchMediaUnitSize;
+                if (exefsOffCheck > 0 && exefsHashLenCheck > 0 && exefsOffCheck + exefsHashLenCheck <= plainNcch.Length)
+                {
+                    byte[] exefsTop = ReadBytesAt(plainNcch, exefsOffCheck, (int)exefsHashLenCheck);
+                    Span<byte> actualExefsHash = stackalloc byte[32];
+                    SHA256.HashData(exefsTop, actualExefsHash);
+                    if (!actualExefsHash.SequenceEqual(ncchHdr.AsSpan(0x1C0, 0x20)))
+                    {
+                        report.CanProcessNow = false;
+                        report.LimitationsAndWarnings.Add(
+                            "El hash SHA-256 de la cabecera ExeFS descifrada no coincide con la cabecera NCCH.");
+                        return report;
+                    }
                 }
 
                 long romfsOffset = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr.AsSpan(0x1B0, 4)) * CiaConstants.NcchMediaUnitSize;
@@ -358,7 +401,7 @@ namespace Lynx.Core.RomFs.Cia
 
             // Honest cryptographic & installability disclosure
             report.LimitationsAndWarnings.Add(
-                "Consola real: Un .cia reconstruido invalida las firmas privadas RSA-2048 de Nintendo. Se instalará y ejecutará en consolas 3DS/2DS con Custom Firmware (Luma3DS + FBI/GodMode9), pero será rechazado en consolas 100% de fábrica sin CFW.");
+                "Nintendo 2DS / 3DS real: El nuevo .cia se genera listo para instalar en tu tarjeta SD con FBI (con Luma3DS / CFW activo). Inicia 'Partida Nueva' para que el Raimon cargue desde el minuto 1 sus nuevas técnicas y jugadores (si tenías una partida previa que quieras conservar aparte, haz copia antes con Checkpoint).");
             report.LimitationsAndWarnings.Add(
                 "Emuladores (Citra / Azahar / Lime3DS): El .cia de salida se genera como 'Standard Decrypted Plain CIA' (sin requerir claves al instalar). Si usaste mods LayeredFS previos en 'load/mods/<TitleID>/', desactívalos para que no oculten el RomFS del nuevo .cia.");
         }
@@ -541,7 +584,7 @@ namespace Lynx.Core.RomFs.Cia
                 long fileOff = present ? runningOffset : -1;
                 if (present)
                 {
-                    runningOffset += (long)csize;
+                    runningOffset += CiaConstants.AlignUp((long)csize, CiaConstants.CiaContentAlignment);
                 }
 
                 chunks.Add(new CiaTmdChunkInfo

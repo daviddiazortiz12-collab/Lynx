@@ -96,6 +96,7 @@ namespace Lynx.Core.RomFs
             public byte[] RawDirHashesCompressed { get; init; } = Array.Empty<byte>();
             public byte[] RawFileEntriesCompressed { get; init; } = Array.Empty<byte>();
             public byte[] RawNameTableCompressed { get; init; } = Array.Empty<byte>();
+            public int DecompressedNameTableLength { get; init; }
             public int DirEntriesCompressionMethod { get; init; }
             public int DirHashesCompressionMethod { get; init; }
             public int FileEntriesCompressionMethod { get; init; }
@@ -222,6 +223,7 @@ namespace Lynx.Core.RomFs
                 RawDirHashesCompressed = dirHashesComp,
                 RawFileEntriesCompressed = fileEntriesComp,
                 RawNameTableCompressed = nameTableComp,
+                DecompressedNameTableLength = nameTableBytes.Length,
                 DirEntriesCompressionMethod = ReadCompressionMethodId(dirEntriesComp),
                 DirHashesCompressionMethod = ReadCompressionMethodId(dirHashesComp),
                 FileEntriesCompressionMethod = ReadCompressionMethodId(fileEntriesComp),
@@ -477,7 +479,17 @@ namespace Lynx.Core.RomFs
             writer.WriteAlignment(alignment);
 
             header.DataOffset = (int)writer.Position;
-            header.TableChunkSize = AlignUpInt(header.DataOffset - headerEnd, 4);
+
+            // CRITICAL FOR REAL NINTENDO 2DS / 3DS HARDWARE (CArchiveArc0 ARM11 allocator):
+            // TableChunkSize is the DECOMPRESSED heap allocation size for DirectoryEntries + DirectoryHashes +
+            // FileEntries + NameTable (+ 0x20 alignment slack), NOT the LZ10-compressed size on disk!
+            // Shrinking TableChunkSize to (DataOffset - headerEnd) when LZ10 is active overflows the ARM11 heap on boot.
+            int decompressedTableChunkSize = ((layout.DirectoryEntries.Length * 20 +
+                                               header.DirectoryHashCount * 4 +
+                                               fileCount * 16 +
+                                               layout.DecompressedNameTableLength +
+                                               0x20 + 3) & ~3);
+            header.TableChunkSize = Math.Max(layout.Header.TableChunkSize, decompressedTableChunkSize);
 
             byte[] copyBuffer = new byte[65536];
             byte[] zeroPad = new byte[alignment];

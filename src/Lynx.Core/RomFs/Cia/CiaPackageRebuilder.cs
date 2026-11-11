@@ -4,13 +4,16 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text;
 
 namespace Lynx.Core.RomFs.Cia
 {
     /// <summary>
-    /// Streaming, source-immutable, multi-content <c>.cia</c> rebuilder.
-    /// Preserves 100% of original RomFS files and secondary contents (Manual / Download Play / Meta SMDH / SaveDataSize)
-    /// while incorporating all modified/added RomFS files and verifying cold integrity prior to atomic commit.
+    /// Streaming, source-immutable, multi-content <c>.cia</c> rebuilder engineered for real Nintendo 2DS / 3DS
+    /// hardware (<c>FBI</c> + <c>Luma3DS</c> + <c>Process9</c>) and emulators (<c>Citra</c> / <c>Azahar</c> / <c>Lime3DS</c>).
+    /// Preserves 100% of original RomFS files (with exact UTF-16LE retail casing for kernel <c>CalcPathHash</c>),
+    /// secondary contents (Manual / Download Play), Meta SMDH, and <c>SaveDataSize</c> while cryptographically
+    /// verifying authentic decryption before rebuild and cold integrity prior to atomic commit.
     /// </summary>
     public static class CiaPackageRebuilder
     {
@@ -19,7 +22,8 @@ namespace Lynx.Core.RomFs.Cia
             string modifiedRomFsDirectory,
             string outputCiaPath,
             CtrKeyStore keyStore = null,
-            Action<int, string> onProgress = null)
+            Action<int, string> onProgress = null,
+            string precomputedSourceSha256 = null)
         {
             if (string.IsNullOrWhiteSpace(modifiedRomFsDirectory))
                 throw new ArgumentException("Ruta de carpeta RomFS modificada vacía.", nameof(modifiedRomFsDirectory));
@@ -29,7 +33,8 @@ namespace Lynx.Core.RomFs.Cia
                 throw new DirectoryNotFoundException($"No existe la carpeta RomFS modificada: {fullDir}");
 
             // Support passing either the root containing ie_a.fa OR a parent folder containing a 'romfs/' subfolder
-            if (!File.Exists(Path.Combine(fullDir, "ie_a.fa")))
+            if (!Directory.EnumerateFiles(fullDir, "*", SearchOption.TopDirectoryOnly)
+                .Any(f => Path.GetFileName(f).Equals("ie_a.fa", StringComparison.OrdinalIgnoreCase)))
             {
                 string subRomfs = Path.Combine(fullDir, "romfs");
                 string subRomFsCaps = Path.Combine(fullDir, "RomFS");
@@ -65,7 +70,8 @@ namespace Lynx.Core.RomFs.Cia
                 extraDirs,
                 outputCiaPath,
                 keyStore,
-                onProgress);
+                onProgress,
+                precomputedSourceSha256);
         }
 
         public static (CiaRebuildTelemetry Telemetry, CiaVerificationResult Verification) RebuildWithFileOverlays(
@@ -74,7 +80,8 @@ namespace Lynx.Core.RomFs.Cia
             IEnumerable<string> extraRelativeDirectories,
             string outputCiaPath,
             CtrKeyStore keyStore = null,
-            Action<int, string> onProgress = null)
+            Action<int, string> onProgress = null,
+            string precomputedSourceSha256 = null)
         {
             if (string.IsNullOrWhiteSpace(sourceCiaPath))
                 throw new ArgumentException("Ruta del .cia original vacía.", nameof(sourceCiaPath));
@@ -87,7 +94,7 @@ namespace Lynx.Core.RomFs.Cia
             if (!File.Exists(fullSource))
                 throw new FileNotFoundException($"No existe el archivo .cia original: {fullSource}", fullSource);
 
-            if (string.Equals(fullSource, fullOutput, StringComparison.OrdinalIgnoreCase))
+            if (PathsReferToSameFile(fullSource, fullOutput))
             {
                 throw new InvalidOperationException(
                     "Protección de archivo fuente activada: la ruta del .cia de salida no puede coincidir con la del .cia original.");
@@ -95,8 +102,16 @@ namespace Lynx.Core.RomFs.Cia
 
             keyStore ??= CtrKeyStore.LoadAvailableLocalKeys();
 
-            onProgress?.Invoke(2, "Calculando huella SHA-256 de protección del .cia original (solo lectura)...");
-            string sourcePreSha256 = CiaFormatInspector.ComputeStreamingFileSha256Hex(fullSource);
+            string sourcePreSha256;
+            if (!string.IsNullOrWhiteSpace(precomputedSourceSha256))
+            {
+                sourcePreSha256 = precomputedSourceSha256;
+            }
+            else
+            {
+                onProgress?.Invoke(2, "Calculando huella SHA-256 de protección del .cia original (solo lectura)...");
+                sourcePreSha256 = CiaFormatInspector.ComputeStreamingFileSha256Hex(fullSource);
+            }
 
             onProgress?.Invoke(6, "Inspeccionando estructura, cabeceras TMD/Ticket y particiones del .cia original...");
             var inspection = CiaFormatInspector.InspectFile(fullSource, keyStore, computeFullFileSha256: false);
@@ -112,12 +127,15 @@ namespace Lynx.Core.RomFs.Cia
             if (!string.IsNullOrEmpty(outDir))
                 Directory.CreateDirectory(outDir);
 
+            // Pre-flight disk space check on output volume so multi-GB writes never fail half-way with opaque IOException
+            EnsureSufficientDiskSpaceIfKnown(outDir ?? fullOutput, inspection.FileSizeBytes + (64L * 1024 * 1024), "guardar el nuevo archivo .cia");
+
             string tempPartPath = $"{fullOutput}.part.{Guid.NewGuid():N}";
-            var expectedOverlaySizes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            var expectedOverlaySizes = new Dictionary<string, long>(StringComparer.Ordinal);
 
             try
             {
-                using (var srcFs = new FileStream(fullSource, FileMode.Open, FileAccess.Read, FileShare.Read, 131072))
+                using (var srcFs = new FileStream(fullSource, FileMode.Open, FileAccess.Read, FileShare.Read, 262144))
                 {
                     byte[] origCiaHdr = CiaFormatInspector.ReadBytesAt(srcFs, 0, (int)CiaConstants.CiaArchiveHeaderSize);
                     byte[] origCert = CiaFormatInspector.ReadBytesAt(srcFs, inspection.CertChainOffset, (int)inspection.CertChainSize);
@@ -127,7 +145,7 @@ namespace Lynx.Core.RomFs.Cia
                         ? CiaFormatInspector.ReadBytesAt(srcFs, inspection.MetaOffset, (int)inspection.MetaSize)
                         : Array.Empty<byte>();
 
-                    // Prepare Ticket copy with ConsoleID cleared to 0 (universal ticket under CFW/emulators)
+                    // Prepare Ticket copy with ConsoleID cleared to 0 (universal ticket for FBI on 2DS/3DS & emulators)
                     byte[] newTik = (byte[])origTik.Clone();
                     if (CiaFormatInspector.TryParseTicket(newTik, out int tikBodyOff, out _, out _, out _, out _))
                     {
@@ -151,13 +169,13 @@ namespace Lynx.Core.RomFs.Cia
                     long tmdOff = inspection.TmdOffset;
                     long contentStartOff = inspection.ContentOffset;
 
-                    int sourceRomFsFileCount;
-                    int outputRomFsFileCount;
+                    int sourceRomFsFileCount = 0;
+                    int outputRomFsFileCount = 0;
                     var overlaidPaths = new List<string>();
                     byte[] newContentIndexMask = new byte[0x2000];
                     long currentOutOffset = contentStartOff;
 
-                    using (var outFs = new FileStream(tempPartPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 131072))
+                    using (var outFs = new FileStream(tempPartPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 262144))
                     {
                         // Reserve prefix up to contentStartOff; write final header/cert/tik/tmd after content hashes are known
                         outFs.SetLength(contentStartOff);
@@ -170,7 +188,8 @@ namespace Lynx.Core.RomFs.Cia
 
                             if (!chunk.IsPresentInCia)
                             {
-                                // Ensure absent optional/DLC chunks also have encrypted bit cleared if untouched, or keep record
+                                ushort absentFlags = (ushort)(chunk.Flags & ~CiaConstants.TmdContentFlagEncrypted);
+                                BinaryPrimitives.WriteUInt16BigEndian(newTmd.AsSpan(chunkRecPos + 0x06, 2), absentFlags);
                                 continue;
                             }
 
@@ -178,14 +197,18 @@ namespace Lynx.Core.RomFs.Cia
 
                             if (chunk.ContentIndex == 0)
                             {
-                                // Rebuild Main CXI (Content 0) with full RomFS preservation + overlays
-                                onProgress?.Invoke(14, "Abriendo partición principal CXI (#0) y construyendo árbol RomFS completo...");
+                                // Rebuild Main CXI (Content 0) with full RomFS preservation + case-preserving overlays
+                                onProgress?.Invoke(14, "Descifrando y verificando cabeceras de la partición principal CXI (#0)...");
                                 using Stream decMainNcch = CiaFormatInspector.OpenDecryptedContentStream(
                                     srcFs, origTik, chunk, keyStore, out bool isMainNcch);
                                 if (!isMainNcch)
                                     throw new InvalidDataException("El contenido principal #0 no es una partición NCCH válida.");
 
                                 byte[] mainHdr = CiaFormatInspector.ReadBytesAt(decMainNcch, 0, 0x200);
+
+                                // Cryptographically verify authentic decryption of Content #0 BEFORE rebuilding!
+                                VerifyAuthenticDecryptedNcchOrThrow(decMainNcch, mainHdr, chunk.ContentIndex, verifyRomFsSuperblock: true);
+
                                 long origRomFsOff = BinaryPrimitives.ReadUInt32LittleEndian(mainHdr.AsSpan(0x1B0, 4)) * CiaConstants.NcchMediaUnitSize;
                                 long origRomFsLen = BinaryPrimitives.ReadUInt32LittleEndian(mainHdr.AsSpan(0x1B4, 4)) * CiaConstants.NcchMediaUnitSize;
 
@@ -193,11 +216,22 @@ namespace Lynx.Core.RomFs.Cia
                                 var origInventory = IvfcRomFsReader.ReadInventory(origRomFsStream);
                                 sourceRomFsFileCount = origInventory.Files.Count;
 
-                                // Assemble complete RomFS specs: start with 100% of original RomFS files
+                                // Build canonical retail casing maps so Windows case-variations (e.g. IE_A.FA) NEVER break
+                                // 3DS Process9's case-sensitive UTF-16LE CalcPathHash lookup on a real Nintendo 2DS!
+                                var canonicalFileByIgnoreCase = new Dictionary<string, string>(origInventory.Files.Count, StringComparer.OrdinalIgnoreCase);
+                                var canonicalDirByIgnoreCase = new Dictionary<string, string>(origInventory.Directories.Count, StringComparer.OrdinalIgnoreCase);
+
+                                foreach (var d in origInventory.Directories)
+                                {
+                                    if (!string.IsNullOrEmpty(d.RelativePath))
+                                        canonicalDirByIgnoreCase[d.RelativePath] = d.RelativePath;
+                                }
+
                                 var mergedSpecs = new Dictionary<string, RomFsBuildFileSpec>(StringComparer.OrdinalIgnoreCase);
                                 foreach (var origFile in origInventory.Files)
                                 {
                                     var captured = origFile;
+                                    canonicalFileByIgnoreCase[origFile.RelativePath] = origFile.RelativePath;
                                     mergedSpecs[origFile.RelativePath] = new RomFsBuildFileSpec
                                     {
                                         RelativePath = origFile.RelativePath,
@@ -206,23 +240,27 @@ namespace Lynx.Core.RomFs.Cia
                                     };
                                 }
 
-                                // Apply ALL overlay files (replacing existing or adding new files!)
+                                // Apply ALL overlay files (preserving canonical retail casing for existing paths!)
                                 if (overlayFilesByRelPath != null)
                                 {
                                     foreach (var kvp in overlayFilesByRelPath)
                                     {
                                         string normRel = StreamingIvfcRomFsBuilder.NormalizeRelPath(kvp.Key);
+                                        if (string.IsNullOrEmpty(normRel))
+                                            continue;
+
+                                        string canonicalRel = CanonicalizeOverlayPath(normRel, canonicalFileByIgnoreCase, canonicalDirByIgnoreCase);
                                         string diskPath = Path.GetFullPath(kvp.Value);
                                         var diskInfo = new FileInfo(diskPath);
                                         if (!diskInfo.Exists)
                                             throw new FileNotFoundException($"Archivo de overlay no encontrado: {diskPath}", diskPath);
 
-                                        expectedOverlaySizes[normRel] = diskInfo.Length;
-                                        overlaidPaths.Add(normRel);
+                                        expectedOverlaySizes[canonicalRel] = diskInfo.Length;
+                                        overlaidPaths.Add(canonicalRel);
 
-                                        mergedSpecs[normRel] = new RomFsBuildFileSpec
+                                        mergedSpecs[canonicalRel] = new RomFsBuildFileSpec
                                         {
-                                            RelativePath = normRel,
+                                            RelativePath = canonicalRel,
                                             Length = diskInfo.Length,
                                             WriteContentTo = target => CopyDiskFile(diskPath, target)
                                         };
@@ -231,7 +269,8 @@ namespace Lynx.Core.RomFs.Cia
 
                                 var allDirs = origInventory.Directories
                                     .Select(d => d.RelativePath)
-                                    .Concat(extraRelativeDirectories ?? Enumerable.Empty<string>())
+                                    .Concat((extraRelativeDirectories ?? Enumerable.Empty<string>())
+                                        .Select(d => CanonicalizeDirectoryPath(StreamingIvfcRomFsBuilder.NormalizeRelPath(d), canonicalDirByIgnoreCase)))
                                     .Where(d => !string.IsNullOrEmpty(d))
                                     .ToList();
 
@@ -240,6 +279,11 @@ namespace Lynx.Core.RomFs.Cia
                                 // Copy NCCH prefix [0 .. origRomFsOff) (Header + ExHeader + PlainRegion + Logo + ExeFS)
                                 outFs.Seek(c0Start, SeekOrigin.Begin);
                                 CopySlice(decMainNcch, 0, origRomFsOff, outFs);
+
+                                // Ensure SDApplication bit (0x02 at ExHeader + 0x0D) is set so real 2DS/3DS mounts SD save data cleanly,
+                                // and normalize unused ExeFS section tail padding to clean 0x00 bytes
+                                EnsureExHeaderSdApplicationFlag(outFs, c0Start, mainHdr);
+                                NormalizePlainExeFsSectionPadding(outFs, c0Start, mainHdr);
 
                                 // Stream-build IVFC Level 0-3 directly at c0Start + origRomFsOff
                                 var ivfcProgress = new Progress<int>(pct =>
@@ -267,10 +311,10 @@ namespace Lynx.Core.RomFs.Cia
                                 if (newNcch0Size > CiaConstants.MaxFat32ContentSizeBytes)
                                 {
                                     throw new InvalidOperationException(
-                                        $"El contenido principal reconstruido ({newNcch0Size:N0} B) excede el límite real de 4 GiB - 1 de FAT32 en Nintendo 3DS.");
+                                        $"El contenido principal reconstruido ({newNcch0Size:N0} B) excede el límite real de 4 GiB - 1 de FAT32 en Nintendo 2DS / 3DS.");
                                 }
 
-                                // Update NCCH #0 header fields and recompute plaintext superblock hashes
+                                // Update NCCH #0 header fields (ExHeader & ExeFS hashes were already verified; RomFS superblock hash updated to ivfcRes)
                                 BinaryPrimitives.WriteUInt32LittleEndian(mainHdr.AsSpan(0x104, 4), (uint)(newNcch0Size / CiaConstants.NcchMediaUnitSize));
                                 BinaryPrimitives.WriteUInt32LittleEndian(mainHdr.AsSpan(0x1B0, 4), (uint)(origRomFsOff / CiaConstants.NcchMediaUnitSize));
                                 BinaryPrimitives.WriteUInt32LittleEndian(mainHdr.AsSpan(0x1B4, 4), (uint)(ivfcRes.TotalIvfcSizeBytes / CiaConstants.NcchMediaUnitSize));
@@ -279,7 +323,6 @@ namespace Lynx.Core.RomFs.Cia
                                 mainHdr[0x18B] = 0x00;
                                 mainHdr[0x18F] = (byte)((mainHdr[0x18F] & ~0x21) | 0x04);
 
-                                RefreshPlainNcchHeaderHashes(outFs, c0Start, mainHdr);
                                 outFs.Seek(c0Start, SeekOrigin.Begin);
                                 outFs.Write(mainHdr, 0, 0x200);
 
@@ -296,15 +339,31 @@ namespace Lynx.Core.RomFs.Cia
                             else
                             {
                                 // Preserve & cleanly decrypt secondary contents (Manual #1, Download Play #2, etc.)
-                                onProgress?.Invoke(80, $"Preservando contenido secundario #{chunk.ContentIndex} ({chunk.RoleDescription})...");
+                                onProgress?.Invoke(80, $"Preservando y verificando contenido secundario #{chunk.ContentIndex} ({chunk.RoleDescription})...");
                                 using Stream decSec = CiaFormatInspector.OpenDecryptedContentStream(
                                     srcFs, origTik, chunk, keyStore, out bool isSecNcch);
 
+                                long copyLen = decSec.Length;
+                                byte[] secHdr = null;
+                                if (isSecNcch && copyLen >= 0x200)
+                                {
+                                    secHdr = CiaFormatInspector.ReadBytesAt(decSec, 0, 0x200);
+                                    uint declaredUnits = BinaryPrimitives.ReadUInt32LittleEndian(secHdr.AsSpan(0x104, 4));
+                                    long declaredBytes = declaredUnits * CiaConstants.NcchMediaUnitSize;
+                                    if (declaredBytes >= 0x200 && declaredBytes <= decSec.Length)
+                                    {
+                                        copyLen = declaredBytes;
+                                    }
+
+                                    // Verify secondary CFA decryption against Nintendo's own NCCH hashes!
+                                    VerifyAuthenticDecryptedNcchOrThrow(decSec, secHdr, chunk.ContentIndex, verifyRomFsSuperblock: true);
+                                }
+
                                 long secStart = currentOutOffset;
                                 outFs.Seek(secStart, SeekOrigin.Begin);
-                                CopySlice(decSec, 0, decSec.Length, outFs);
+                                CopySlice(decSec, 0, copyLen, outFs);
 
-                                long secSize = decSec.Length;
+                                long secSize = copyLen;
                                 if (secSize % CiaConstants.CiaContentAlignment != 0)
                                 {
                                     long alignedSec = CiaConstants.AlignUp(secSize, CiaConstants.CiaContentAlignment);
@@ -312,12 +371,11 @@ namespace Lynx.Core.RomFs.Cia
                                     secSize = alignedSec;
                                 }
 
-                                if (isSecNcch && secSize >= 0x200)
+                                if (isSecNcch && secHdr != null)
                                 {
-                                    byte[] secHdr = CiaFormatInspector.ReadBytesAt(outFs, secStart, 0x200);
+                                    NormalizePlainExeFsSectionPadding(outFs, secStart, secHdr);
                                     secHdr[0x18B] = 0x00;
                                     secHdr[0x18F] = (byte)((secHdr[0x18F] & ~0x21) | 0x04);
-                                    RefreshPlainNcchHeaderHashes(outFs, secStart, secHdr);
                                     outFs.Seek(secStart, SeekOrigin.Begin);
                                     outFs.Write(secHdr, 0, 0x200);
                                 }
@@ -334,18 +392,8 @@ namespace Lynx.Core.RomFs.Cia
 
                         long totalNewContentSize = currentOutOffset - contentStartOff;
 
-                        // Cascade TMD ContentChunkRecords -> ContentInfo[0] -> TMD.InfoRecordHash
-                        Span<byte> infoRecordsSpan = newTmd.AsSpan(tmdBodyOff + 0xC4, 0x900);
-                        infoRecordsSpan.Clear();
-
-                        ushort totalChunkRecords = (ushort)parsedChunks.Count;
-                        BinaryPrimitives.WriteUInt16BigEndian(infoRecordsSpan.Slice(0, 2), 0);
-                        BinaryPrimitives.WriteUInt16BigEndian(infoRecordsSpan.Slice(2, 2), totalChunkRecords);
-                        SHA256.HashData(
-                            newTmd.AsSpan(chunksTableStart, totalChunkRecords * CiaConstants.TmdContentChunkRecordSize),
-                            infoRecordsSpan.Slice(4, 0x20));
-
-                        SHA256.HashData(infoRecordsSpan, newTmd.AsSpan(tmdBodyOff + 0xA4, 0x20));
+                        // Cascade TMD ContentChunkRecords -> ContentInfo[0..63] -> TMD.InfoRecordHash (GodMode9 FixTmdHashes compatible)
+                        UpdateTmdContentInfoHashes(newTmd, tmdBodyOff, chunksTableStart, (ushort)parsedChunks.Count);
 
                         // Build final 0x2020 CIA Header
                         byte[] newCiaHdr = (byte[])origCiaHdr.Clone();
@@ -380,7 +428,7 @@ namespace Lynx.Core.RomFs.Cia
                     }
 
                     // Cold-start verification of the .part file BEFORE atomic rename
-                    onProgress?.Invoke(88, "Ejecutando verificación criptográfica en frío del nuevo .cia (TMD, NCCH, IVFC 4 niveles y RomFS)...");
+                    onProgress?.Invoke(88, "Ejecutando verificación criptográfica en frío para 2DS / 3DS (TMD, NCCH, .code, IVFC 4 niveles y RomFS)...");
                     var verification = CiaPackageVerifier.VerifyColdCiaFile(
                         tempPartPath,
                         expectedTitleIdHex: inspection.TmdTitleIdHex,
@@ -408,7 +456,7 @@ namespace Lynx.Core.RomFs.Cia
 
                     string outputSha256 = CiaFormatInspector.ComputeStreamingFileSha256Hex(fullOutput);
                     long outLen = new FileInfo(fullOutput).Length;
-                    overlaidPaths.Sort(StringComparer.OrdinalIgnoreCase);
+                    overlaidPaths.Sort(StringComparer.Ordinal);
 
                     var telemetry = new CiaRebuildTelemetry
                     {
@@ -422,8 +470,8 @@ namespace Lynx.Core.RomFs.Cia
                         TitleVersionFormatted = inspection.TmdTitleVersionFormatted,
                         PreservedSaveDataSizeBytes = inspection.SaveDataSizeBytes,
                         PreservedContentsCount = verification.VerifiedContentChunksCount,
-                        SourceRomFsFileCount = inspection.RomFsFileCount,
-                        OutputRomFsFileCount = verification.VerifiedRomFsFilesCount,
+                        SourceRomFsFileCount = sourceRomFsFileCount,
+                        OutputRomFsFileCount = outputRomFsFileCount,
                         OverlaidModifiedRomFsFilesCount = overlaidPaths.Count,
                         OverlaidRelativePaths = overlaidPaths
                     };
@@ -439,44 +487,303 @@ namespace Lynx.Core.RomFs.Cia
             }
         }
 
-        private static void RefreshPlainNcchHeaderHashes(Stream ncchContainerStream, long ncchStart, byte[] ncchHdr512)
+        internal static string CanonicalizeOverlayPath(
+            string normalizedRelPath,
+            IReadOnlyDictionary<string, string> canonicalFileByIgnoreCase,
+            IReadOnlyDictionary<string, string> canonicalDirByIgnoreCase)
         {
-            uint exHdrDataSize = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr512.AsSpan(0x180, 4));
-            if (exHdrDataSize > 0)
+            if (canonicalFileByIgnoreCase.TryGetValue(normalizedRelPath, out string exactFile))
+                return exactFile;
+
+            int lastSlash = normalizedRelPath.LastIndexOf('/');
+            if (lastSlash < 0)
+                return normalizedRelPath;
+
+            string dirPart = normalizedRelPath.Substring(0, lastSlash);
+            string fileName = normalizedRelPath.Substring(lastSlash + 1);
+            string canonicalDir = CanonicalizeDirectoryPath(dirPart, canonicalDirByIgnoreCase);
+            return canonicalDir + "/" + fileName;
+        }
+
+        internal static string CanonicalizeDirectoryPath(
+            string normalizedDir,
+            IReadOnlyDictionary<string, string> canonicalDirByIgnoreCase)
+        {
+            if (string.IsNullOrEmpty(normalizedDir))
+                return string.Empty;
+
+            if (canonicalDirByIgnoreCase.TryGetValue(normalizedDir, out string exactDir))
+                return exactDir;
+
+            string[] parts = normalizedDir.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            string built = string.Empty;
+            for (int i = 0; i < parts.Length; i++)
             {
-                byte[] exHdr400 = CiaFormatInspector.ReadBytesAt(ncchContainerStream, ncchStart + 0x200, 0x400);
-                SHA256.HashData(exHdr400, ncchHdr512.AsSpan(0x160, 0x20));
+                string candidate = i == 0 ? parts[0] : built + "/" + parts[i];
+                if (canonicalDirByIgnoreCase.TryGetValue(candidate, out string matchedPrefix))
+                {
+                    built = matchedPrefix;
+                }
+                else
+                {
+                    built = candidate;
+                }
+            }
+            return built;
+        }
+
+        private static void VerifyAuthenticDecryptedNcchOrThrow(
+            Stream plainNcch,
+            ReadOnlySpan<byte> ncchHdr,
+            ushort contentIndex,
+            bool verifyRomFsSuperblock)
+        {
+            Span<byte> actual = stackalloc byte[32];
+
+            uint exHdrDataSize = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr.Slice(0x180, 4));
+            if (exHdrDataSize >= 0x400)
+            {
+                byte[] exHdr400 = CiaFormatInspector.ReadBytesAt(plainNcch, 0x200, 0x400);
+                SHA256.HashData(exHdr400, actual);
+                if (!actual.SequenceEqual(ncchHdr.Slice(0x160, 0x20)))
+                {
+                    throw new InvalidDataException(
+                        $"El ExHeader descifrado del contenido #{contentIndex} no coincide con su SHA-256 original (clave incorrecta o archivo corrupto).");
+                }
             }
 
-            long logoOff = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr512.AsSpan(0x198, 4)) * CiaConstants.NcchMediaUnitSize;
-            long logoLen = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr512.AsSpan(0x19C, 4)) * CiaConstants.NcchMediaUnitSize;
-            if (logoOff > 0 && logoLen > 0)
-            {
-                byte[] logoBytes = CiaFormatInspector.ReadBytesAt(ncchContainerStream, ncchStart + logoOff, (int)logoLen);
-                SHA256.HashData(logoBytes, ncchHdr512.AsSpan(0x130, 0x20));
-            }
-
-            long exefsOff = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr512.AsSpan(0x1A0, 4)) * CiaConstants.NcchMediaUnitSize;
-            long exefsHashLen = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr512.AsSpan(0x1A8, 4)) * CiaConstants.NcchMediaUnitSize;
+            long exefsOff = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr.Slice(0x1A0, 4)) * CiaConstants.NcchMediaUnitSize;
+            long exefsSize = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr.Slice(0x1A4, 4)) * CiaConstants.NcchMediaUnitSize;
+            long exefsHashLen = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr.Slice(0x1A8, 4)) * CiaConstants.NcchMediaUnitSize;
             if (exefsOff > 0 && exefsHashLen > 0)
             {
-                byte[] exefsTop = CiaFormatInspector.ReadBytesAt(ncchContainerStream, ncchStart + exefsOff, (int)exefsHashLen);
-                SHA256.HashData(exefsTop, ncchHdr512.AsSpan(0x1C0, 0x20));
+                byte[] exefsTop = CiaFormatInspector.ReadBytesAt(plainNcch, exefsOff, (int)exefsHashLen);
+                SHA256.HashData(exefsTop, actual);
+                if (!actual.SequenceEqual(ncchHdr.Slice(0x1C0, 0x20)))
+                {
+                    throw new InvalidDataException(
+                        $"La cabecera ExeFS descifrada del contenido #{contentIndex} no coincide con su SHA-256 original.");
+                }
+
+                if (exefsSize >= 0x200 && exefsTop.Length >= 0x200)
+                {
+                    VerifyExeFsSectionsOrThrow(plainNcch, exefsOff, exefsSize, exefsTop, contentIndex);
+                }
             }
 
-            long romfsOff = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr512.AsSpan(0x1B0, 4)) * CiaConstants.NcchMediaUnitSize;
-            long romfsHashLen = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr512.AsSpan(0x1B8, 4)) * CiaConstants.NcchMediaUnitSize;
-            if (romfsOff > 0 && romfsHashLen > 0)
+            if (verifyRomFsSuperblock)
             {
-                byte[] romfsTop = CiaFormatInspector.ReadBytesAt(ncchContainerStream, ncchStart + romfsOff, (int)romfsHashLen);
-                SHA256.HashData(romfsTop, ncchHdr512.AsSpan(0x1E0, 0x20));
+                long romfsOff = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr.Slice(0x1B0, 4)) * CiaConstants.NcchMediaUnitSize;
+                long romfsHashLen = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr.Slice(0x1B8, 4)) * CiaConstants.NcchMediaUnitSize;
+                if (romfsOff > 0 && romfsHashLen > 0)
+                {
+                    byte[] romfsTop = CiaFormatInspector.ReadBytesAt(plainNcch, romfsOff, (int)romfsHashLen);
+                    SHA256.HashData(romfsTop, actual);
+                    if (!actual.SequenceEqual(ncchHdr.Slice(0x1E0, 0x20)))
+                    {
+                        throw new InvalidDataException(
+                            $"El superbloque RomFS descifrado del contenido #{contentIndex} no coincide con su SHA-256 original.");
+                    }
+                }
             }
+        }
+
+        internal static void VerifyExeFsSectionsOrThrow(
+            Stream ncchContainerStream,
+            long exefsAbsoluteOffset,
+            long exefsTotalSizeBytes,
+            ReadOnlySpan<byte> exefsHeader512,
+            ushort contentIndex)
+        {
+            Span<byte> actual = stackalloc byte[32];
+            for (int i = 0; i < 10; i++)
+            {
+                int entryPos = i * 0x10;
+                string secName = Encoding.ASCII.GetString(exefsHeader512.Slice(entryPos, 8)).TrimEnd('\0');
+                uint secRelOff = BinaryPrimitives.ReadUInt32LittleEndian(exefsHeader512.Slice(entryPos + 8, 4));
+                uint secSize = BinaryPrimitives.ReadUInt32LittleEndian(exefsHeader512.Slice(entryPos + 12, 4));
+                if (secSize == 0 || string.IsNullOrEmpty(secName))
+                    continue;
+
+                if (0x200L + secRelOff + secSize > exefsTotalSizeBytes)
+                {
+                    throw new InvalidDataException(
+                        $"La sección ExeFS '{secName}' en contenido #{contentIndex} excede los límites de ExeFS.");
+                }
+
+                ReadOnlySpan<byte> expectedHash = exefsHeader512.Slice(0x200 - (i + 1) * 0x20, 0x20);
+                byte[] hashBytes = ComputeStreamSliceSha256(ncchContainerStream, exefsAbsoluteOffset + 0x200 + secRelOff, secSize);
+                hashBytes.AsSpan().CopyTo(actual);
+
+                if (!actual.SequenceEqual(expectedHash))
+                {
+                    // Fallback check for non-standard synthetic tools that hashed AlignUp(secSize, 0x200) when padding is zero
+                    long alignedSize = CiaConstants.AlignUp(secSize, CiaConstants.NcchMediaUnitSize);
+                    bool matchedAligned = false;
+                    if (alignedSize > secSize && 0x200L + secRelOff + alignedSize <= exefsTotalSizeBytes)
+                    {
+                        byte[] alignedHash = ComputeStreamSliceSha256(ncchContainerStream, exefsAbsoluteOffset + 0x200 + secRelOff, alignedSize);
+                        matchedAligned = alignedHash.AsSpan().SequenceEqual(expectedHash);
+                    }
+
+                    if (!matchedAligned)
+                    {
+                        throw new InvalidDataException(
+                            $"El ejecutable/sección ExeFS '{secName}' en contenido #{contentIndex} no coincide con su hash SHA-256 (corrupción detectada).");
+                    }
+                }
+            }
+        }
+
+        private static void EnsureExHeaderSdApplicationFlag(Stream outFs, long ncchStart, byte[] ncchHdr512)
+        {
+            uint exHdrDataSize = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr512.AsSpan(0x180, 4));
+            if (exHdrDataSize < 0x400)
+                return;
+
+            byte[] exHdr400 = CiaFormatInspector.ReadBytesAt(outFs, ncchStart + 0x200, 0x400);
+            if ((exHdr400[0x0D] & 0x02) == 0)
+            {
+                // Set SDApplication flag (bit 1 of SCI.Flags, 3dsconv / GodMode9 SetNcchSdFlag) so 2DS mounts SD save data
+                exHdr400[0x0D] |= 0x02;
+                outFs.Seek(ncchStart + 0x200, SeekOrigin.Begin);
+                outFs.Write(exHdr400, 0, 0x400);
+                SHA256.HashData(exHdr400, ncchHdr512.AsSpan(0x160, 0x20));
+            }
+        }
+
+        private static void NormalizePlainExeFsSectionPadding(Stream outFs, long ncchStart, ReadOnlySpan<byte> ncchHdr512)
+        {
+            long exefsOff = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr512.Slice(0x1A0, 4)) * CiaConstants.NcchMediaUnitSize;
+            long exefsSize = BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr512.Slice(0x1A4, 4)) * CiaConstants.NcchMediaUnitSize;
+            if (exefsOff <= 0 || exefsSize < 0x200)
+                return;
+
+            byte[] exefsHdr = CiaFormatInspector.ReadBytesAt(outFs, ncchStart + exefsOff, 0x200);
+            Span<byte> actual = stackalloc byte[32];
+
+            for (int i = 0; i < 10; i++)
+            {
+                int entryPos = i * 0x10;
+                string secName = Encoding.ASCII.GetString(exefsHdr, entryPos, 8).TrimEnd('\0');
+                uint secRelOff = BinaryPrimitives.ReadUInt32LittleEndian(exefsHdr.AsSpan(entryPos + 8, 4));
+                uint secSize = BinaryPrimitives.ReadUInt32LittleEndian(exefsHdr.AsSpan(entryPos + 12, 4));
+                if (secSize == 0 || string.IsNullOrEmpty(secName))
+                    continue;
+
+                long aligned = CiaConstants.AlignUp(secSize, CiaConstants.NcchMediaUnitSize);
+                if (aligned > secSize && 0x200L + secRelOff + aligned <= exefsSize)
+                {
+                    // Only zero tail padding when section hash covers exact secSize (standard Nintendo SDK / makerom)
+                    byte[] exactHash = ComputeStreamSliceSha256(outFs, ncchStart + exefsOff + 0x200 + secRelOff, secSize);
+                    exactHash.AsSpan().CopyTo(actual);
+                    if (actual.SequenceEqual(exefsHdr.AsSpan(0x200 - (i + 1) * 0x20, 0x20)))
+                    {
+                        WriteZerosAt(outFs, ncchStart + exefsOff + 0x200 + secRelOff + secSize, aligned - secSize);
+                    }
+                }
+            }
+        }
+
+        private static void UpdateTmdContentInfoHashes(
+            byte[] newTmd,
+            int tmdBodyOff,
+            int chunksTableStart,
+            ushort totalChunkRecords)
+        {
+            Span<byte> infoRecordsSpan = newTmd.AsSpan(tmdBodyOff + 0xC4, 0x900);
+
+            // Check if existing ContentInfo[0..63] cmd_count sum equals totalChunkRecords; if so, preserve grouping (GodMode9 FixTmdHashes)
+            int existingSum = 0;
+            bool validGrouping = true;
+            for (int g = 0; g < CiaConstants.TmdContentInfoRecordCount; g++)
+            {
+                ushort cmdCount = BinaryPrimitives.ReadUInt16BigEndian(infoRecordsSpan.Slice(g * 0x24 + 2, 2));
+                if (cmdCount == 0)
+                    continue;
+                if (existingSum + cmdCount > totalChunkRecords)
+                {
+                    validGrouping = false;
+                    break;
+                }
+                existingSum += cmdCount;
+            }
+
+            if (validGrouping && existingSum == totalChunkRecords && totalChunkRecords > 0)
+            {
+                int cursor = 0;
+                for (int g = 0; g < CiaConstants.TmdContentInfoRecordCount && cursor < totalChunkRecords; g++)
+                {
+                    Span<byte> rec = infoRecordsSpan.Slice(g * 0x24, 0x24);
+                    ushort cmdCount = BinaryPrimitives.ReadUInt16BigEndian(rec.Slice(2, 2));
+                    if (cmdCount == 0)
+                        continue;
+
+                    SHA256.HashData(
+                        newTmd.AsSpan(chunksTableStart + cursor * CiaConstants.TmdContentChunkRecordSize, cmdCount * CiaConstants.TmdContentChunkRecordSize),
+                        rec.Slice(4, 0x20));
+                    cursor += cmdCount;
+                }
+            }
+            else
+            {
+                infoRecordsSpan.Clear();
+                if (totalChunkRecords > 0)
+                {
+                    BinaryPrimitives.WriteUInt16BigEndian(infoRecordsSpan.Slice(0, 2), 0);
+                    BinaryPrimitives.WriteUInt16BigEndian(infoRecordsSpan.Slice(2, 2), totalChunkRecords);
+                    SHA256.HashData(
+                        newTmd.AsSpan(chunksTableStart, totalChunkRecords * CiaConstants.TmdContentChunkRecordSize),
+                        infoRecordsSpan.Slice(4, 0x20));
+                }
+            }
+
+            SHA256.HashData(infoRecordsSpan, newTmd.AsSpan(tmdBodyOff + 0xA4, 0x20));
+        }
+
+        internal static void EnsureSufficientDiskSpaceIfKnown(string targetPath, long requiredBytes, string actionDescription)
+        {
+            try
+            {
+                string root = Path.GetPathRoot(Path.GetFullPath(targetPath));
+                if (string.IsNullOrWhiteSpace(root))
+                    return;
+
+                var drive = new DriveInfo(root);
+                if (drive.IsReady && drive.AvailableFreeSpace > 0 && drive.AvailableFreeSpace < requiredBytes)
+                {
+                    double freeGb = drive.AvailableFreeSpace / (1024.0 * 1024.0 * 1024.0);
+                    double reqGb = requiredBytes / (1024.0 * 1024.0 * 1024.0);
+                    throw new IOException(
+                        $"Espacio insuficiente en la unidad '{drive.Name}' para {actionDescription}: disponibles {freeGb:F2} GB, necesarios al menos {reqGb:F2} GB.");
+                }
+            }
+            catch (IOException)
+            {
+                throw;
+            }
+            catch
+            {
+                // Ignore if virtual/UNC filesystem does not report DriveInfo
+            }
+        }
+
+        private static bool PathsReferToSameFile(string pathA, string pathB)
+        {
+            StringComparison cmp = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return string.Equals(
+                Path.GetFullPath(pathA).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                Path.GetFullPath(pathB).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                cmp);
         }
 
         private static void CopySlice(Stream source, long sourceOffset, long length, Stream destination)
         {
-            source.Seek(sourceOffset, SeekOrigin.Begin);
-            byte[] buf = new byte[131072];
+            if (source.Position != sourceOffset)
+                source.Seek(sourceOffset, SeekOrigin.Begin);
+            byte[] buf = new byte[65536];
             long rem = length;
             while (rem > 0)
             {
@@ -491,8 +798,8 @@ namespace Lynx.Core.RomFs.Cia
 
         private static void CopyDiskFile(string diskPath, Stream destination)
         {
-            using var fs = new FileStream(diskPath, FileMode.Open, FileAccess.Read, FileShare.Read, 131072);
-            byte[] buf = new byte[131072];
+            using var fs = new FileStream(diskPath, FileMode.Open, FileAccess.Read, FileShare.Read, 262144);
+            byte[] buf = new byte[65536];
             int r;
             while ((r = fs.Read(buf, 0, buf.Length)) > 0)
             {
@@ -515,11 +822,11 @@ namespace Lynx.Core.RomFs.Cia
             }
         }
 
-        private static byte[] ComputeStreamSliceSha256(Stream s, long offset, long length)
+        internal static byte[] ComputeStreamSliceSha256(Stream s, long offset, long length)
         {
             s.Seek(offset, SeekOrigin.Begin);
             using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            byte[] buf = new byte[131072];
+            byte[] buf = new byte[65536];
             long rem = length;
             while (rem > 0)
             {

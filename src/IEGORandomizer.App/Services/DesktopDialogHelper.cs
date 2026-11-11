@@ -123,30 +123,33 @@ namespace IEGORandomizer.App.Services
             {
                 string safeSuggested = string.IsNullOrWhiteSpace(suggestedName)
                     ? "InazumaElevenGO_Randomizado.cia"
-                    : suggestedName.Replace("'", "");
+                    : suggestedName.Replace("'", "''");
 
                 string script = mode switch
                 {
                     "folder" =>
-                        "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Selecciona la carpeta (RomFS o carpeta de salida)'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog($owner) -eq 'OK') { Write-Output $f.SelectedPath }; $owner.Dispose()",
+                        "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Selecciona la carpeta (RomFS o carpeta de salida)'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog($owner) -eq 'OK') { [Console]::Out.WriteLine($f.SelectedPath) }; $owner.Dispose()",
                     "cia" =>
-                        "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Title = 'Selecciona el archivo .cia original de Inazuma Eleven GO (solo lectura)'; $f.Filter = 'Archivo instalable Nintendo 3DS (*.cia)|*.cia|Todos los archivos (*.*)|*.*'; if ($f.ShowDialog($owner) -eq 'OK') { Write-Output $f.FileName }; $owner.Dispose()",
+                        "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Title = 'Selecciona el archivo .cia original de Inazuma Eleven GO (solo lectura)'; $f.Filter = 'Archivo instalable Nintendo 2DS / 3DS (*.cia)|*.cia|Todos los archivos (*.*)|*.*'; if ($f.ShowDialog($owner) -eq 'OK') { [Console]::Out.WriteLine($f.FileName) }; $owner.Dispose()",
                     "save-cia" =>
-                        $"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}}; $f = New-Object System.Windows.Forms.SaveFileDialog; $f.Title = 'Guardar nuevo archivo .cia generado'; $f.Filter = 'Archivo instalable Nintendo 3DS (*.cia)|*.cia'; $f.DefaultExt = 'cia'; $f.FileName = '{safeSuggested}'; $f.OverwritePrompt = $true; if ($f.ShowDialog($owner) -eq 'OK') {{ Write-Output $f.FileName }}; $owner.Dispose()",
+                        $"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}}; $f = New-Object System.Windows.Forms.SaveFileDialog; $f.Title = 'Guardar nuevo archivo .cia generado'; $f.Filter = 'Archivo instalable Nintendo 2DS / 3DS (*.cia)|*.cia'; $f.DefaultExt = 'cia'; $f.FileName = '{safeSuggested}'; $f.OverwritePrompt = $true; if ($f.ShowDialog($owner) -eq 'OK') {{ [Console]::Out.WriteLine($f.FileName) }}; $owner.Dispose()",
                     "keys" =>
-                        "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Title = 'Selecciona tu archivo local aes_keys.txt'; $f.Filter = 'Claves AES 3DS (aes_keys.txt;*.txt)|aes_keys.txt;*.txt|Todos los archivos (*.*)|*.*'; if ($f.ShowDialog($owner) -eq 'OK') { Write-Output $f.FileName }; $owner.Dispose()",
+                        "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Title = 'Selecciona tu archivo local aes_keys.txt'; $f.Filter = 'Claves AES 3DS (aes_keys.txt;*.txt)|aes_keys.txt;*.txt|Todos los archivos (*.*)|*.*'; if ($f.ShowDialog($owner) -eq 'OK') { [Console]::Out.WriteLine($f.FileName) }; $owner.Dispose()",
                     _ =>
-                        "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Title = 'Selecciona .cia, ie_a.fa o ROM .3ds desencriptada'; $f.Filter = 'Inazuma Eleven GO (*.cia;*.fa;*.3ds;*.cxi;*.romfs)|*.cia;*.fa;*.3ds;*.cci;*.cxi;*.romfs|Todos los archivos (*.*)|*.*'; if ($f.ShowDialog($owner) -eq 'OK') { Write-Output $f.FileName }; $owner.Dispose()"
+                        "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Title = 'Selecciona .cia, ie_a.fa o ROM .3ds desencriptada'; $f.Filter = 'Inazuma Eleven GO (*.cia;*.fa;*.3ds;*.cxi;*.romfs)|*.cia;*.fa;*.3ds;*.cci;*.cxi;*.romfs|Todos los archivos (*.*)|*.*'; if ($f.ShowDialog($owner) -eq 'OK') { [Console]::Out.WriteLine($f.FileName) }; $owner.Dispose()"
                 };
+
+                string encodedCmd = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
 
                 using var proc = Process.Start(new ProcessStartInfo
                 {
                     FileName = "powershell",
-                    Arguments = $"-NoProfile -STA -WindowStyle Hidden -Command \"{script}\"",
+                    Arguments = $"-NoProfile -STA -WindowStyle Hidden -EncodedCommand {encodedCmd}",
                     CreateNoWindow = true,
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
-                    RedirectStandardError = true
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = System.Text.Encoding.UTF8
                 });
 
                 if (proc == null)

@@ -175,11 +175,14 @@ namespace IEGORandomizer.Engine.Cia
                         : "El archivo .cia original no puede procesarse.");
             }
 
-            string tempRunDir = Path.Combine(Path.GetTempPath(), "iego_cia_build_" + Guid.NewGuid().ToString("N"));
+            string tempRunDir = SelectStagingDirectoryWithMostSpace(fullOutput, "iego_cia_build_" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tempRunDir);
 
             try
             {
+                Report(progress, 3, "Calculando huella SHA-256 inicial del .cia original...");
+                string sourcePreSha256 = CiaFormatInspector.ComputeStreamingFileSha256Hex(fullSource);
+
                 // Clone options so our internal staging export uses clean Citra romfs layout without mutating caller's options
                 string optJson = JsonSerializer.Serialize(options);
                 var stageOptions = JsonSerializer.Deserialize<RandomizerOptions>(optJson) ?? new RandomizerOptions();
@@ -218,7 +221,8 @@ namespace IEGORandomizer.Engine.Cia
                     {
                         int mapped = 60 + (pct * 38) / 100;
                         Report(progress, mapped, msg);
-                    });
+                    },
+                    precomputedSourceSha256: sourcePreSha256);
 
                 report.CiaBuildTelemetry = telemetry;
                 report.CiaVerification = verification;
@@ -314,10 +318,11 @@ namespace IEGORandomizer.Engine.Cia
                         : "El archivo .cia original no puede procesarse.");
             }
 
-            // Pre-validate ie_a.fa inside the modified RomFS directory if present
+            // Pre-validate ie_a.fa inside the modified RomFS directory if present (case-insensitively on all OSes)
             bool preValidatedIea = false;
-            string candidateIea = Path.Combine(resolvedRomFsRoot, "ie_a.fa");
-            if (File.Exists(candidateIea))
+            string candidateIea = Directory.EnumerateFiles(resolvedRomFsRoot, "*", SearchOption.TopDirectoryOnly)
+                .FirstOrDefault(f => Path.GetFileName(f).Equals("ie_a.fa", StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrEmpty(candidateIea) && File.Exists(candidateIea))
             {
                 Report(progress, 5, "Validando integridad del contenedor ARC0 'ie_a.fa' en la carpeta RomFS modificada...");
                 using var gameCheck = new SafeGOGame(candidateIea, "es");
@@ -373,15 +378,22 @@ namespace IEGORandomizer.Engine.Cia
             if (!Directory.Exists(dir))
                 throw new DirectoryNotFoundException($"No existe la carpeta RomFS: {dir}");
 
-            if (File.Exists(Path.Combine(dir, "ie_a.fa")))
+            if (Directory.EnumerateFiles(dir, "*", SearchOption.TopDirectoryOnly)
+                .Any(f => Path.GetFileName(f).Equals("ie_a.fa", StringComparison.OrdinalIgnoreCase)))
+            {
                 return dir;
+            }
 
             // Support passing Citra/Luma parent folders (e.g. output/Citra/load/mods/<TitleID>/ or output/Luma3DS/titles/<TitleID>/)
-            string directRomfs = Path.Combine(dir, "romfs");
-            if (Directory.Exists(directRomFsPath(directRomfs)))
-                return directRomfs;
+            foreach (string sub in Directory.EnumerateDirectories(dir, "*", SearchOption.TopDirectoryOnly))
+            {
+                if (Path.GetFileName(sub).Equals("romfs", StringComparison.OrdinalIgnoreCase))
+                    return sub;
+            }
 
-            string[] nestedIea = Directory.GetFiles(dir, "ie_a.fa", SearchOption.AllDirectories);
+            string[] nestedIea = Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
+                .Where(f => Path.GetFileName(f).Equals("ie_a.fa", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
             if (nestedIea.Length == 1)
             {
                 string parent = Path.GetDirectoryName(nestedIea[0])!;
@@ -390,8 +402,47 @@ namespace IEGORandomizer.Engine.Cia
             }
 
             return dir;
+        }
 
-            static string directRomFsPath(string p) => p;
+        private static string SelectStagingDirectoryWithMostSpace(string fullOutputCiaPath, string tempFolderName)
+        {
+            string sysTempBase = Path.GetTempPath();
+            string outParent = Path.GetDirectoryName(fullOutputCiaPath);
+
+            try
+            {
+                long sysFree = GetDriveFreeBytes(sysTempBase);
+                long outFree = !string.IsNullOrEmpty(outParent) ? GetDriveFreeBytes(outParent) : -1;
+
+                // If system %TEMP% has < 2.5 GB free and output drive has significantly more space, stage next to output
+                if (sysFree > 0 && sysFree < 2_500_000_000L && outFree > sysFree && !string.IsNullOrEmpty(outParent))
+                {
+                    Directory.CreateDirectory(outParent);
+                    return Path.Combine(outParent, "." + tempFolderName);
+                }
+            }
+            catch
+            {
+                // Fallback to Path.GetTempPath()
+            }
+
+            return Path.Combine(sysTempBase, tempFolderName);
+        }
+
+        private static long GetDriveFreeBytes(string path)
+        {
+            try
+            {
+                string root = Path.GetPathRoot(Path.GetFullPath(path));
+                if (string.IsNullOrWhiteSpace(root))
+                    return -1;
+                var d = new DriveInfo(root);
+                return d.IsReady ? d.AvailableFreeSpace : -1;
+            }
+            catch
+            {
+                return -1;
+            }
         }
 
         private static string EnsureCiaExtension(string outputPath, string defaultFileName)

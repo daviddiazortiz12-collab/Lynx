@@ -319,29 +319,25 @@ namespace IEGORandomizer.Engine.Diagnostics
                 }
             }
 
-            // If targetOutputOrCitraDir points directly to a generated output ie_a.fa or Randomizer output directory (not a Citra mods root), diff it too!
+            // If targetOutputOrCitraDir points directly to a generated output .cia, ie_a.fa, or Randomizer output directory (not a Citra mods root), diff it too!
             if (!string.IsNullOrWhiteSpace(targetOutputOrCitraDir))
             {
-                string trimmedLeaf = Path.GetFileName(Path.GetFullPath(targetOutputOrCitraDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-                bool isModsRoot = string.Equals(trimmedLeaf, "mods", StringComparison.OrdinalIgnoreCase);
-                string candidateOutFa = isModsRoot
-                    ? string.Empty
-                    : ResolveGeneratedIeAFa(targetOutputOrCitraDir, finalReport.ExpectedPrimaryTitleId);
-
-                if (!string.IsNullOrEmpty(candidateOutFa) &&
-                    File.Exists(candidateOutFa) &&
-                    !Arc0SafeArchive.PathsEqual(candidateOutFa, workspace.ActiveIeAFaPath))
+                string fullTarget = Path.GetFullPath(targetOutputOrCitraDir);
+                if (File.Exists(fullTarget) &&
+                    fullTarget.EndsWith(".cia", StringComparison.OrdinalIgnoreCase) &&
+                    !Arc0SafeArchive.PathsEqual(fullTarget, fullInput))
                 {
                     try
                     {
+                        using var outWs = GameWorkspace.Open(fullTarget, requestedEdition, "es", computeSourceSha256: false);
                         finalReport.TargetOutputDiff = PostSaveArchiveVerifier.VerifyPersistedMutations(
                             workspace.ActiveIeAFaPath,
-                            candidateOutFa,
+                            outWs.ActiveIeAFaPath,
                             "es",
                             report: null);
 
                         finalReport.Findings.Add(
-                            $"Comparación contra salida '{candidateOutFa}': {finalReport.TargetOutputDiff.PersistedModifiedFilesCount} archivos internos distintos, " +
+                            $"Comparación contra el .cia generado '{fullTarget}': {finalReport.TargetOutputDiff.PersistedModifiedFilesCount} archivos internos distintos, " +
                             $"{finalReport.TargetOutputDiff.PersistedChangedCharaParamsCount} jugadores cambiados, " +
                             $"{finalReport.TargetOutputDiff.PersistedChangedSkillTableEntriesCount} huecos de técnicas cambiados, " +
                             $"{finalReport.TargetOutputDiff.PersistedChangedStoryTeamsCount} equipos rivales cambiados, " +
@@ -351,7 +347,42 @@ namespace IEGORandomizer.Engine.Diagnostics
                     catch (Exception ex)
                     {
                         finalReport.ActionableWarnings.Add(
-                            $"El archivo exportado '{candidateOutFa}' parece incompleto o dañado: {ex.Message}");
+                            $"El archivo .cia exportado '{fullTarget}' parece incompleto o dañado: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    string trimmedLeaf = Path.GetFileName(fullTarget.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                    bool isModsRoot = string.Equals(trimmedLeaf, "mods", StringComparison.OrdinalIgnoreCase);
+                    string candidateOutFa = isModsRoot
+                        ? string.Empty
+                        : ResolveGeneratedIeAFa(targetOutputOrCitraDir, finalReport.ExpectedPrimaryTitleId);
+
+                    if (!string.IsNullOrEmpty(candidateOutFa) &&
+                        File.Exists(candidateOutFa) &&
+                        !Arc0SafeArchive.PathsEqual(candidateOutFa, workspace.ActiveIeAFaPath))
+                    {
+                        try
+                        {
+                            finalReport.TargetOutputDiff = PostSaveArchiveVerifier.VerifyPersistedMutations(
+                                workspace.ActiveIeAFaPath,
+                                candidateOutFa,
+                                "es",
+                                report: null);
+
+                            finalReport.Findings.Add(
+                                $"Comparación contra salida '{candidateOutFa}': {finalReport.TargetOutputDiff.PersistedModifiedFilesCount} archivos internos distintos, " +
+                                $"{finalReport.TargetOutputDiff.PersistedChangedCharaParamsCount} jugadores cambiados, " +
+                                $"{finalReport.TargetOutputDiff.PersistedChangedSkillTableEntriesCount} huecos de técnicas cambiados, " +
+                                $"{finalReport.TargetOutputDiff.PersistedChangedStoryTeamsCount} equipos rivales cambiados, " +
+                                $"{finalReport.TargetOutputDiff.PersistedChangedPachangaTeamsCount} pachangas cambiadas, " +
+                                $"{finalReport.TargetOutputDiff.PersistedChangedTeamParamsCount} parámetros/equipaciones de equipo cambiados.");
+                        }
+                        catch (Exception ex)
+                        {
+                            finalReport.ActionableWarnings.Add(
+                                $"El archivo exportado '{candidateOutFa}' parece incompleto o dañado: {ex.Message}");
+                        }
                     }
                 }
             }
