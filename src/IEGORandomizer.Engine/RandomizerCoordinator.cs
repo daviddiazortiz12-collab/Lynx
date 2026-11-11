@@ -50,7 +50,8 @@ namespace IEGORandomizer.Engine
                 inputPath,
                 options.Edition,
                 options.PreferredLanguageCode,
-                computeSourceSha256: true);
+                computeSourceSha256: true,
+                aesKeysPath: options.AesKeysPath);
 
             var report = new RandomizationExecutionReport
             {

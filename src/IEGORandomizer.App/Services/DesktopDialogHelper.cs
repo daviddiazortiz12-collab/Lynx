@@ -30,7 +30,7 @@ namespace IEGORandomizer.App.Services
     {
         private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
         {
-            ".fa", ".3ds", ".cci", ".cxi", ".romfs"
+            ".cia", ".fa", ".3ds", ".cci", ".cxi", ".romfs", ".txt"
         };
 
         public static FileBrowserResponse BrowseDirectory(string requestedPath, bool directoriesOnly)
@@ -114,16 +114,30 @@ namespace IEGORandomizer.App.Services
         /// using a TopMost owner window so the dialog always appears in front of the app window.
         /// Returns null on non-Windows platforms so the frontend seamlessly opens the built-in browser modal.
         /// </summary>
-        public static string TryPickNativeWindowsDialog(string mode)
+        public static string TryPickNativeWindowsDialog(string mode, string suggestedName = null)
         {
             if (!OperatingSystem.IsWindows())
                 return null;
 
             try
             {
-                string script = mode == "folder"
-                    ? "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Selecciona la carpeta (RomFS o carpeta de salida)'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog($owner) -eq 'OK') { Write-Output $f.SelectedPath }; $owner.Dispose()"
-                    : "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Title = 'Selecciona ie_a.fa o ROM .3ds desencriptada'; $f.Filter = 'Inazuma Eleven GO (*.fa;*.3ds;*.cxi;*.romfs)|*.fa;*.3ds;*.cci;*.cxi;*.romfs|Todos los archivos (*.*)|*.*'; if ($f.ShowDialog($owner) -eq 'OK') { Write-Output $f.FileName }; $owner.Dispose()";
+                string safeSuggested = string.IsNullOrWhiteSpace(suggestedName)
+                    ? "InazumaElevenGO_Randomizado.cia"
+                    : suggestedName.Replace("'", "");
+
+                string script = mode switch
+                {
+                    "folder" =>
+                        "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Selecciona la carpeta (RomFS o carpeta de salida)'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog($owner) -eq 'OK') { Write-Output $f.SelectedPath }; $owner.Dispose()",
+                    "cia" =>
+                        "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Title = 'Selecciona el archivo .cia original de Inazuma Eleven GO (solo lectura)'; $f.Filter = 'Archivo instalable Nintendo 3DS (*.cia)|*.cia|Todos los archivos (*.*)|*.*'; if ($f.ShowDialog($owner) -eq 'OK') { Write-Output $f.FileName }; $owner.Dispose()",
+                    "save-cia" =>
+                        $"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}}; $f = New-Object System.Windows.Forms.SaveFileDialog; $f.Title = 'Guardar nuevo archivo .cia generado'; $f.Filter = 'Archivo instalable Nintendo 3DS (*.cia)|*.cia'; $f.DefaultExt = 'cia'; $f.FileName = '{safeSuggested}'; $f.OverwritePrompt = $true; if ($f.ShowDialog($owner) -eq 'OK') {{ Write-Output $f.FileName }}; $owner.Dispose()",
+                    "keys" =>
+                        "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Title = 'Selecciona tu archivo local aes_keys.txt'; $f.Filter = 'Claves AES 3DS (aes_keys.txt;*.txt)|aes_keys.txt;*.txt|Todos los archivos (*.*)|*.*'; if ($f.ShowDialog($owner) -eq 'OK') { Write-Output $f.FileName }; $owner.Dispose()",
+                    _ =>
+                        "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized'}; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Title = 'Selecciona .cia, ie_a.fa o ROM .3ds desencriptada'; $f.Filter = 'Inazuma Eleven GO (*.cia;*.fa;*.3ds;*.cxi;*.romfs)|*.cia;*.fa;*.3ds;*.cci;*.cxi;*.romfs|Todos los archivos (*.*)|*.*'; if ($f.ShowDialog($owner) -eq 'OK') { Write-Output $f.FileName }; $owner.Dispose()"
+                };
 
                 using var proc = Process.Start(new ProcessStartInfo
                 {

@@ -3,7 +3,57 @@
 
   let modalTargetInput = null;
   let modalDirsOnly = false;
+  let modalSaveCiaMode = false;
   let modalParentDir = "";
+  let activeWorkflowMode = "cia-randomize"; // "cia-randomize" | "cia-merge" | "classic"
+
+  function setWorkflowMode(mode) {
+    activeWorkflowMode = mode;
+    document.querySelectorAll(".workflow-tab").forEach((b) => {
+      b.classList.toggle("active", b.getAttribute("data-wmode") === mode);
+    });
+
+    const isCia = mode === "cia-randomize" || mode === "cia-merge";
+    const isMerge = mode === "cia-merge";
+    const isClassic = mode === "classic";
+
+    $("ciaPathsSection").classList.toggle("hidden", !isCia);
+    $("mergeRomFsRow").classList.toggle("hidden", !isMerge);
+    $("classicPathsSection").classList.toggle("hidden", !isClassic);
+    $("classicOutputSection").classList.toggle("hidden", !isClassic);
+    $("classicExportCard").classList.toggle("hidden", !isClassic);
+    $("titleIdOverrideCol").classList.toggle("hidden", !isClassic);
+    $("editionTitleRow").classList.toggle("hidden", isMerge);
+    $("seedBlindCard").classList.toggle("hidden", isMerge);
+    $("allSubsystemsWrapper").classList.toggle("hidden", isMerge);
+    $("categoriesHeader").classList.toggle("hidden", isMerge);
+    $("mergeExplainBox").classList.toggle("hidden", !isMerge);
+
+    if (mode === "cia-randomize") {
+      $("btnGenerate").textContent = "⚡ Randomizar .cia y Generar Nuevo .cia Verificado";
+    } else if (mode === "cia-merge") {
+      $("btnGenerate").textContent = "🧩 Fusionar Carpeta RomFS + .cia y Verificar Nuevo .cia";
+    } else {
+      $("btnGenerate").textContent = "⚡ Generar Run Randomizada (Modo Clásico v1.0.2)";
+    }
+
+    suggestOutputCiaPath(true);
+  }
+
+  document.querySelectorAll(".workflow-tab").forEach((btn) => {
+    btn.addEventListener("click", () => setWorkflowMode(btn.getAttribute("data-wmode")));
+  });
+
+  function suggestOutputCiaPath(allowSuffixUpdate = false) {
+    const src = ($("sourceCiaPath").value || "").trim();
+    if (!src) return;
+    const cur = ($("outputCiaPath").value || "").trim();
+    const suffix = activeWorkflowMode === "cia-merge" ? "_RomFsMerged.cia" : "_Randomizado.cia";
+    const baseNoExt = src.replace(/\.cia$/i, "");
+    if (!cur || (allowSuffixUpdate && (cur.endsWith("_Randomizado.cia") || cur.endsWith("_RomFsMerged.cia")))) {
+      $("outputCiaPath").value = baseNoExt + suffix;
+    }
+  }
 
   // Slider live labels
   $("plStatVar").addEventListener("input", (e) => {
@@ -148,14 +198,19 @@
   });
 
   // File / Folder picker (attempts native Windows dialog first, falls back to built-in browser modal)
-  async function openPicker(targetInputId, mode, title) {
+  async function openPicker(targetInputId, mode, title, suggestedName = "") {
     try {
-      const nativeRes = await fetch(`api/fs/pick-native?mode=${encodeURIComponent(mode)}`, { method: "POST" });
+      const url = `api/fs/pick-native?mode=${encodeURIComponent(mode)}&suggestedName=${encodeURIComponent(suggestedName || "")}`;
+      const nativeRes = await fetch(url, { method: "POST" });
       if (nativeRes.ok) {
         const nativeData = await nativeRes.json();
         if (nativeData.supported && nativeData.selectedPath) {
           $(targetInputId).value = nativeData.selectedPath;
           if (targetInputId === "inputPath") inspectInputPath(nativeData.selectedPath);
+          if (targetInputId === "sourceCiaPath") {
+            suggestOutputCiaPath(true);
+            inspectLocalCia(false);
+          }
           return;
         }
         if (nativeData.supported) {
@@ -167,9 +222,17 @@
     }
 
     modalTargetInput = targetInputId;
-    modalDirsOnly = mode === "folder";
+    modalSaveCiaMode = mode === "save-cia";
+    modalDirsOnly = mode === "folder" || modalSaveCiaMode;
     $("modalTitle").textContent = title;
+    $("modalNewSubfolder").placeholder = modalSaveCiaMode
+      ? "Nombre del nuevo archivo .cia (ej. InazumaGO_Luz_Randomizado.cia)"
+      : "Opcional: subcarpeta nueva (ej. Run_Luz_01)";
+    if (modalSaveCiaMode && suggestedName) {
+      $("modalNewSubfolder").value = suggestedName;
+    }
     $("modalNewSubfolder").style.display = modalDirsOnly ? "block" : "none";
+    $("btnModalSelectCurrent").textContent = modalSaveCiaMode ? "Guardar aquí" : "Seleccionar esta carpeta";
     $("btnModalSelectCurrent").style.display = modalDirsOnly ? "inline-block" : "none";
     $("browserModal").classList.remove("hidden");
     await loadModalDirectory($(targetInputId).value.trim());
@@ -220,6 +283,10 @@
           $(modalTargetInput).value = item.fullPath;
           closeModal();
           if (modalTargetInput === "inputPath") inspectInputPath(item.fullPath);
+          if (modalTargetInput === "sourceCiaPath") {
+            suggestOutputCiaPath(true);
+            inspectLocalCia(false);
+          }
         }
       });
       entriesEl.appendChild(row);
@@ -231,7 +298,7 @@
   }
 
   $("btnPickInputFile").addEventListener("click", () =>
-    openPicker("inputPath", "file", "Seleccionar archivo .3ds o ie_a.fa"));
+    openPicker("inputPath", "file", "Seleccionar archivo .cia, .3ds o ie_a.fa"));
   $("btnPickInputFolder").addEventListener("click", () =>
     openPicker("inputPath", "folder", "Seleccionar carpeta RomFS extraída"));
   $("btnPickOutputFolder").addEventListener("click", () =>
@@ -239,13 +306,106 @@
   $("btnPickCitraModsFolder").addEventListener("click", () =>
     openPicker("citraModsRootInput", "folder", "Seleccionar carpeta load/mods de Citra o Azahar"));
 
+  $("btnPickSourceCia").addEventListener("click", () =>
+    openPicker("sourceCiaPath", "cia", "Seleccionar archivo .cia original (solo lectura)"));
+  $("btnPickModifiedRomFs").addEventListener("click", () =>
+    openPicker("modifiedRomFsDir", "folder", "Seleccionar carpeta RomFS modificada"));
+  $("btnPickOutputCia").addEventListener("click", () => {
+    const src = ($("sourceCiaPath").value || "").trim();
+    const base = src
+      ? src.split(/[\\/]/).pop().replace(/\.cia$/i, "") + (activeWorkflowMode === "cia-merge" ? "_RomFsMerged.cia" : "_Randomizado.cia")
+      : "InazumaElevenGO_Randomizado.cia";
+    openPicker("outputCiaPath", "save-cia", "Elegir destino del nuevo archivo .cia", base);
+  });
+  $("btnPickAesKeys").addEventListener("click", () =>
+    openPicker("aesKeysPath", "keys", "Seleccionar archivo local aes_keys.txt"));
+
+  let ciaInspectTimer = null;
+  async function inspectLocalCia(saveDiagJson = false) {
+    const ciaPath = ($("sourceCiaPath").value || "").trim();
+    const box = $("ciaInspectBox");
+    if (!ciaPath) {
+      box.classList.add("hidden");
+      return;
+    }
+
+    suggestOutputCiaPath(false);
+    box.classList.remove("hidden");
+    box.innerHTML = `<span style="color:#93c5fd;">🔎 Inspeccionando localmente cabeceras CIA / TMD / NCCH / RomFS (100% solo lectura)...</span>`;
+
+    const exportDiagnosticJsonPath = saveDiagJson
+      ? ciaPath.replace(/\.cia$/i, "") + ".cia-diagnostico-sin-rom.json"
+      : "";
+
+    try {
+      const res = await fetch("api/cia/inspect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ciaPath,
+          aesKeysPath: ($("aesKeysPath").value || "").trim(),
+          computeSha256: false,
+          exportDiagnosticJsonPath
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.report) {
+        box.innerHTML = `<strong style="color:#fca5a5;">⚠️ ${escapeHtml(data.error || "No se pudo inspeccionar el archivo .cia.")}</strong>`;
+        return;
+      }
+
+      const r = data.report;
+      if (r.detectedEdition && r.detectedEdition !== "Auto") {
+        $("editionSelect").value = r.detectedEdition;
+      }
+
+      const okChip = r.canProcessNow
+        ? `<span class="cia-chip ok">✅ Listo para procesar</span>`
+        : `<span class="cia-chip warn">⚠️ Requiere atención</span>`;
+      const verChip = `<span class="cia-chip">${escapeHtml(r.tmdTitleVersionFormatted || "V.?")} ${r.isBaseRevisionV000 ? "(Base retail V.0.0.0)" : ""}</span>`;
+      const encChip = `<span class="cia-chip">${escapeHtml(r.encryptionKind)}</span>`;
+      const tidChip = `<span class="cia-chip">${escapeHtml(r.detectedEdition)} · ${escapeHtml(r.tmdTitleIdHex)}</span>`;
+
+      let html = `<div class="cia-badge-row">${okChip}${verChip}${encChip}${tidChip}</div>`;
+      html += `<div><strong>Tamaño:</strong> ${(r.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB · <strong>Contenidos TMD:</strong> ${r.contentCount} · <strong>SaveDataSize:</strong> ${Math.round(r.saveDataSizeBytes / 1024)} KB${r.smdhBannerTitle ? ` · <strong>Banner:</strong> ${escapeHtml(r.smdhBannerTitle)}` : ""}</div>`;
+      if (r.romFsReadable) {
+        html += `<div><strong>RomFS completa legible:</strong> ${r.romFsFileCount} archivos en ${r.romFsDirectoryCount} carpetas (<code>ie_a.fa</code>=${r.hasIeAFa ? "SÍ" : "NO"}, <code>fix.xr</code>=${r.hasFixXr ? "SÍ" : "NO"}, sonidos=${r.romFsSoundFilesCount}, vídeos=${r.romFsMovieFilesCount})</div>`;
+      }
+      if (Array.isArray(r.limitationsAndWarnings) && r.limitationsAndWarnings.length > 0) {
+        html += `<ul style="margin:6px 0 4px;padding-left:18px;color:#cbd5e1;">${r.limitationsAndWarnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul>`;
+      }
+      if (data.exportedDiagnosticJsonPath) {
+        html += `<div style="margin-top:6px;color:#6ee7b7;">💾 Informe JSON técnico local (sin datos de ROM) guardado en: <code>${escapeHtml(data.exportedDiagnosticJsonPath)}</code></div>`;
+      } else {
+        html += `<div style="margin-top:6px;"><button type="button" class="btn btn-chip" id="btnExportRomFreeDiag">📄 Guardar informe JSON técnico local (sin bytes de ROM)</button></div>`;
+      }
+
+      box.innerHTML = html;
+      const expBtn = $("btnExportRomFreeDiag");
+      if (expBtn) expBtn.addEventListener("click", () => inspectLocalCia(true));
+    } catch (err) {
+      box.innerHTML = `<strong style="color:#fca5a5;">⚠️ Error al inspeccionar .cia: ${escapeHtml(err.message)}</strong>`;
+    }
+  }
+
+  $("btnInspectLocalCia").addEventListener("click", () => inspectLocalCia(false));
+  $("sourceCiaPath").addEventListener("input", () => {
+    clearTimeout(ciaInspectTimer);
+    ciaInspectTimer = setTimeout(() => inspectLocalCia(false), 450);
+  });
+  $("aesKeysPath").addEventListener("change", () => {
+    if (($("sourceCiaPath").value || "").trim()) inspectLocalCia(false);
+  });
+
   // Local Diagnostic Mode (zero spoilers)
   $("btnDiagnoseLocal").addEventListener("click", async () => {
     const diagBox = $("diagnosticResultBox");
-    const inputPath = $("inputPath").value.trim();
+    const inputPath = activeWorkflowMode === "classic"
+      ? $("inputPath").value.trim()
+      : $("sourceCiaPath").value.trim();
     if (!inputPath) {
       diagBox.className = "result-box failure";
-      diagBox.innerHTML = "<strong>Falta entrada:</strong> Selecciona primero tu archivo <code>ie_a.fa</code>, carpeta <code>RomFS</code> o <code>.3ds</code>.";
+      diagBox.innerHTML = "<strong>Falta entrada:</strong> Selecciona primero tu archivo <code>.cia</code>, <code>ie_a.fa</code>, carpeta <code>RomFS</code> o <code>.3ds</code>.";
       diagBox.classList.remove("hidden");
       return;
     }
@@ -299,7 +459,11 @@
   $("btnModalSelectCurrent").addEventListener("click", () => {
     let chosen = $("modalCurrentPath").value.trim();
     const sub = $("modalNewSubfolder").value.trim();
-    if (sub && modalTargetInput === "outputDir") {
+    if (modalSaveCiaMode) {
+      const sep = chosen.includes("\\") ? "\\" : "/";
+      const fname = sub || "InazumaElevenGO_Randomizado.cia";
+      chosen = chosen.replace(/[\\/]+$/, "") + sep + (fname.toLowerCase().endsWith(".cia") ? fname : fname + ".cia");
+    } else if (sub && modalTargetInput === "outputDir") {
       const sep = chosen.includes("\\") ? "\\" : "/";
       chosen = chosen.replace(/[\\/]+$/, "") + sep + sub;
     }
@@ -316,6 +480,7 @@
       seed: $("seedInput").value.trim(),
       edition: $("editionSelect").value,
       preferredLanguageCode: "es",
+      aesKeysPath: ($("aesKeysPath").value || "").trim(),
       blindPlayMode: $("optBlindPlay").checked,
       players: {
         enabled: $("playersEnabled").checked,
@@ -387,18 +552,52 @@
   }
 
   $("btnGenerate").addEventListener("click", async () => {
-    const inputPath = $("inputPath").value.trim();
-    const outputDirectory = $("outputDir").value.trim();
     const resultBox = $("resultBox");
     const progressArea = $("progressArea");
-
     resultBox.classList.add("hidden");
 
-    if (!inputPath || !outputDirectory) {
-      resultBox.className = "result-box failure";
-      resultBox.innerHTML = "<strong>Faltan rutas:</strong> Selecciona el archivo/carpeta de entrada y una carpeta de salida separada.";
-      resultBox.classList.remove("hidden");
-      return;
+    let endpoint = "api/jobs";
+    let bodyPayload = null;
+
+    if (activeWorkflowMode === "cia-randomize") {
+      const sourceCiaPath = $("sourceCiaPath").value.trim();
+      const outputCiaPath = $("outputCiaPath").value.trim();
+      if (!sourceCiaPath || !outputCiaPath) {
+        resultBox.className = "result-box failure";
+        resultBox.innerHTML = "<strong>Faltan rutas .cia:</strong> Selecciona tu archivo <code>.cia</code> original y la ruta del nuevo <code>.cia</code> de salida.";
+        resultBox.classList.remove("hidden");
+        return;
+      }
+      endpoint = "api/jobs/cia-randomize";
+      bodyPayload = { sourceCiaPath, outputCiaPath, options: buildOptionsPayload() };
+    } else if (activeWorkflowMode === "cia-merge") {
+      const sourceCiaPath = $("sourceCiaPath").value.trim();
+      const modifiedRomFsDirectory = $("modifiedRomFsDir").value.trim();
+      const outputCiaPath = $("outputCiaPath").value.trim();
+      if (!sourceCiaPath || !modifiedRomFsDirectory || !outputCiaPath) {
+        resultBox.className = "result-box failure";
+        resultBox.innerHTML = "<strong>Faltan rutas para la fusión:</strong> Indica el <code>.cia</code> original, la carpeta <code>RomFS</code> modificada y la ruta del nuevo <code>.cia</code>.";
+        resultBox.classList.remove("hidden");
+        return;
+      }
+      endpoint = "api/jobs/cia-merge";
+      bodyPayload = {
+        sourceCiaPath,
+        modifiedRomFsDirectory,
+        outputCiaPath,
+        aesKeysPath: ($("aesKeysPath").value || "").trim()
+      };
+    } else {
+      const inputPath = $("inputPath").value.trim();
+      const outputDirectory = $("outputDir").value.trim();
+      if (!inputPath || !outputDirectory) {
+        resultBox.className = "result-box failure";
+        resultBox.innerHTML = "<strong>Faltan rutas:</strong> Selecciona el archivo/carpeta de entrada y una carpeta de salida separada.";
+        resultBox.classList.remove("hidden");
+        return;
+      }
+      endpoint = "api/jobs";
+      bodyPayload = { inputPath, outputDirectory, options: buildOptionsPayload() };
     }
 
     $("btnGenerate").disabled = true;
@@ -407,14 +606,10 @@
     $("progressLabel").textContent = "Enviando configuración al motor...";
 
     try {
-      const res = await fetch("api/jobs", {
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          inputPath,
-          outputDirectory,
-          options: buildOptionsPayload()
-        })
+        body: JSON.stringify(bodyPayload)
       });
 
       const job = await res.json();
@@ -447,6 +642,48 @@
         throw new Error(state.errorMessage || "Falló la validación del archivo.");
       }
 
+      if (state.status === "completed" && state.jobMode === "cia-merge" && state.mergeReport) {
+        const mr = state.mergeReport;
+        const t = mr.rebuildTelemetry;
+        const v = mr.verification;
+        const outParentDir = t.outputCiaPath.replace(/[\\/][^\\/]+$/, "");
+        const overlaidItems = (t.overlaidRelativePaths || []).slice(0, 25).map((p) => `<li><code>${escapeHtml(p)}</code></li>`).join("");
+
+        resultBox.className = "result-box success";
+        resultBox.innerHTML = `
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+            <div><strong>✅ ¡Nuevo archivo .cia fusionado con toda la RomFS y verificado en frío!</strong></div>
+            <button type="button" class="btn btn-secondary" id="btnOpenMergedCiaFolder">📂 Abrir carpeta del nuevo .cia</button>
+          </div>
+          <div class="result-grid" style="margin-top:8px;">
+            <div class="metric-pill"><strong>Nuevo .cia:</strong> <code>${escapeHtml(t.outputCiaPath)}</code> (${(t.outputCiaSizeBytes / (1024 * 1024)).toFixed(1)} MB)</div>
+            <div class="metric-pill"><strong>TitleID / Versión:</strong> <code>${escapeHtml(t.titleIdHex)}</code> (${escapeHtml(t.titleVersionFormatted)}) · SaveData: ${Math.round(t.preservedSaveDataSizeBytes / 1024)} KB</div>
+            <div class="metric-pill"><strong>Archivos RomFS incorporados:</strong> ${t.overlaidModifiedRomFsFilesCount}</div>
+            <div class="metric-pill"><strong>RomFS total en el .cia:</strong> ${t.outputRomFsFileCount} archivos (origen: ${t.sourceRomFsFileCount})</div>
+            <div class="metric-pill"><strong>IVFC 4 niveles SHA-256:</strong> ${v.verifiedIvfcBlocksCount} bloques verificados · ${t.preservedContentsCount} contenidos</div>
+            <div class="metric-pill"><strong>SHA-256 original intacto:</strong> <code style="font-size:0.75rem;">${escapeHtml(t.sourceCiaSha256Hex)}</code></div>
+          </div>
+          <details style="margin-top:8px;">
+            <summary style="cursor:pointer;font-weight:600;">Ver rutas de RomFS incorporadas y comprobaciones en frío</summary>
+            <ul style="margin:6px 0;padding-left:18px;">${(v.checksPassed || []).map((c) => `<li>✓ ${escapeHtml(c)}</li>`).join("")}</ul>
+            <div><strong>Archivos superpuestos/añadidos (${t.overlaidModifiedRomFsFilesCount}):</strong></div>
+            <ul style="margin:4px 0 0;padding-left:18px;">${overlaidItems}</ul>
+          </details>
+        `;
+        resultBox.classList.remove("hidden");
+        const openM = $("btnOpenMergedCiaFolder");
+        if (openM) {
+          openM.addEventListener("click", async () => {
+            await fetch("api/app/open-folder", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ folderPath: outParentDir })
+            });
+          });
+        }
+        return;
+      }
+
       if (state.status === "completed" && state.report) {
         const rep = state.report;
         $("seedInput").value = rep.seed;
@@ -457,7 +694,19 @@
           .map((p) => `<li><code>${escapeHtml(p)}</code></li>`)
           .join("");
 
-        const currentOutDir = $("outputDir").value.trim();
+        const isCiaJob = state.jobMode === "cia-randomize" && !!rep.ciaBuildTelemetry;
+        const currentOutDir = isCiaJob
+          ? rep.ciaBuildTelemetry.outputCiaPath.replace(/[\\/][^\\/]+$/, "")
+          : $("outputDir").value.trim();
+
+        const ciaBannerHtml = isCiaJob
+          ? `<div style="margin-top:8px;padding:9px 12px;border-radius:8px;background:rgba(16,185,129,0.16);border:1px solid rgba(16,185,129,0.42);font-size:0.84rem;line-height:1.48;">
+              📦 <strong>Nuevo .cia generado y verificado en frío:</strong> <code>${escapeHtml(rep.ciaBuildTelemetry.outputCiaPath)}</code> (${(rep.ciaBuildTelemetry.outputCiaSizeBytes / (1024 * 1024)).toFixed(1)} MB)<br/>
+              • <strong>RomFS completa preservada:</strong> ${rep.ciaBuildTelemetry.outputRomFsFileCount} archivos totales (origen: ${rep.ciaBuildTelemetry.sourceRomFsFileCount}) · <strong>SaveDataSize:</strong> ${Math.round(rep.ciaBuildTelemetry.preservedSaveDataSizeBytes / 1024)} KB · <strong>IVFC SHA-256:</strong> ${rep.ciaVerification ? rep.ciaVerification.verifiedIvfcBlocksCount : 0} bloques<br/>
+              • <strong>SHA-256 .cia original intacto:</strong> <code style="font-size:0.74rem;">${escapeHtml(rep.ciaBuildTelemetry.sourceCiaSha256Hex)}</code>
+            </div>`
+          : "";
+
         const diff = rep.persistedDiffTelemetry;
         const diffSummaryHtml = diff
           ? `<div class="metric-pill"><strong>Archivos internos modificados en disco:</strong> ${diff.persistedModifiedFilesCount} (Rivales: ${diff.persistedChangedStoryTeamsCount}, Pachangas: ${diff.persistedChangedPachangaTeamsCount}, Técnicas: ${diff.persistedChangedSkillTableEntriesCount})</div>`
@@ -469,12 +718,13 @@
         resultBox.className = "result-box success";
         resultBox.innerHTML = `
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-            <div><strong>✅ ¡Partida generada y verificada en disco!</strong> ${rep.blindPlayMode ? "<span>(Modo a Ciegas activo: 0 spoilers mostrados)</span>" : ""}</div>
+            <div><strong>${isCiaJob ? "✅ ¡Nuevo archivo .cia randomizado y verificado en frío!" : "✅ ¡Partida generada y verificada en disco!"}</strong> ${rep.blindPlayMode ? "<span>(Modo a Ciegas activo: 0 spoilers mostrados)</span>" : ""}</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
-              <button type="button" class="btn btn-primary" id="btnInstallToCitraNow">🎮 Instalar directo en Citra</button>
+              ${!isCiaJob ? `<button type="button" class="btn btn-primary" id="btnInstallToCitraNow">🎮 Instalar directo en Citra</button>` : ""}
               <button type="button" class="btn btn-secondary" id="btnOpenGeneratedFolder">📂 Abrir carpeta de salida</button>
             </div>
           </div>
+          ${ciaBannerHtml}
           ${citraInstallBanner}
           <div id="citraQuickInstallMsg" style="margin-top:6px;font-size:0.84rem;"></div>
           <div class="result-grid">
@@ -543,4 +793,6 @@
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
   }
+
+  setWorkflowMode("cia-randomize");
 })();

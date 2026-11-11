@@ -25,7 +25,8 @@ namespace Lynx.Core.RomFs
         RomFsDirectory = 1,
         Nintendo3dsRom = 2,
         NcchContainer = 3,
-        RomFsImage = 4
+        RomFsImage = 4,
+        CtrImportableArchive = 5
     }
 
     /// <summary>
@@ -34,6 +35,7 @@ namespace Lynx.Core.RomFs
     public static class TitleIdCatalog
     {
         public const string LightEurTitleId = "0004000000112F00";
+        public const string LightEurAltTitleId = "000400000017C100";
         public const string ShadowEurTitleId = "0004000000113000";
         public const string ShadowEurAltTitleId = "000400000017C200";
         public const string LightJpnTitleId = "000400000006D400";
@@ -49,7 +51,7 @@ namespace Lynx.Core.RomFs
             if (!string.IsNullOrWhiteSpace(titleIdHex))
             {
                 string norm = titleIdHex.Trim().ToUpperInvariant();
-                if (norm == LightEurTitleId || norm == LightJpnTitleId)
+                if (norm == LightEurTitleId || norm == LightEurAltTitleId || norm == LightJpnTitleId)
                     return GameEdition.Light;
                 if (norm == ShadowEurTitleId || norm == ShadowEurAltTitleId || norm == ShadowJpnTitleId)
                     return GameEdition.Shadow;

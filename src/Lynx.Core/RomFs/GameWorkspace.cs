@@ -1,7 +1,9 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using Lynx.Core.Games;
+using Lynx.Core.RomFs.Cia;
 
 namespace Lynx.Core.RomFs
 {
@@ -58,7 +60,8 @@ namespace Lynx.Core.RomFs
             string inputPath,
             GameEdition requestedEdition = GameEdition.Auto,
             string preferredLanguageCode = null,
-            bool computeSourceSha256 = true)
+            bool computeSourceSha256 = true,
+            string aesKeysPath = null)
         {
             if (string.IsNullOrWhiteSpace(inputPath))
                 throw new ArgumentException("La ruta de entrada no puede estar vacía.", nameof(inputPath));
@@ -103,6 +106,56 @@ namespace Lynx.Core.RomFs
             }
 
             var (sourceSha, sourceLen) = InspectFileIntegrity(fullInput, computeSourceSha256);
+
+            // Case 1b: Nintendo 3DS .cia archive -> extract ie_a.fa cleanly into isolated temp folder
+            if (IsLikelyCiaArchive(fullInput))
+            {
+                var keyStore = CtrKeyStore.LoadAvailableLocalKeys(aesKeysPath);
+                var ciaReport = CiaFormatInspector.InspectFile(fullInput, keyStore, computeFullFileSha256: false);
+                if (!ciaReport.IsValidCiaStructure || !ciaReport.CanProcessNow)
+                {
+                    string reason = ciaReport.LimitationsAndWarnings.Count > 0
+                        ? string.Join(" ", ciaReport.LimitationsAndWarnings)
+                        : "El archivo .cia no puede abrirse en su estado actual.";
+                    throw new InvalidOperationException(reason);
+                }
+
+                string ciaStageDir = Path.Combine(Path.GetTempPath(), "iego_randomizer_cia_" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(ciaStageDir);
+                try
+                {
+                    string stagedIeaPath = Path.Combine(ciaStageDir, "ie_a.fa");
+                    ExtractIeAFaFromCia(fullInput, ciaReport, keyStore, stagedIeaPath);
+
+                    GameEdition edition = requestedEdition != GameEdition.Auto
+                        ? requestedEdition
+                        : (ciaReport.DetectedEdition != GameEdition.Auto ? ciaReport.DetectedEdition : GameEdition.Light);
+
+                    string titleId = !string.IsNullOrWhiteSpace(ciaReport.TmdTitleIdHex)
+                        ? ciaReport.TmdTitleIdHex
+                        : TitleIdCatalog.GetDefaultTitleId(edition);
+
+                    var game = new SafeGOGame(stagedIeaPath, preferredLanguageCode);
+                    return new GameWorkspace(
+                        fullInput,
+                        fullInput,
+                        stagedIeaPath,
+                        ciaStageDir,
+                        GameInputKind.CtrImportableArchive,
+                        edition,
+                        titleId,
+                        ciaReport.ProductCode,
+                        sourceSha,
+                        sourceLen,
+                        game);
+                }
+                catch
+                {
+                    try { Directory.Delete(ciaStageDir, recursive: true); } catch { }
+                    throw;
+                }
+            }
+
             RomContainerMetadata meta = Nintendo3dsRomReader.Inspect(fullInput);
 
             // Case 2: Direct ie_a.fa ARC0 file
@@ -186,6 +239,54 @@ namespace Lynx.Core.RomFs
             }
 
             return true;
+        }
+
+        private static bool IsLikelyCiaArchive(string filePath)
+        {
+            if (filePath.EndsWith(".cia", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            try
+            {
+                using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                if (fs.Length < CiaConstants.CiaArchiveHeaderSize)
+                    return false;
+
+                Span<byte> first8 = stackalloc byte[8];
+                if (fs.Read(first8) < 8)
+                    return false;
+
+                uint hdrSize = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(first8.Slice(0, 4));
+                ushort ciaType = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(first8.Slice(4, 2));
+                return hdrSize == CiaConstants.CiaArchiveHeaderSize && ciaType == 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void ExtractIeAFaFromCia(
+            string ciaPath,
+            CiaInspectionReport report,
+            CtrKeyStore keyStore,
+            string destinationIeaPath)
+        {
+            var mainChunk = report.ContentChunks.First(c => c.ContentIndex == 0 && c.IsPresentInCia);
+            using var fs = new FileStream(ciaPath, FileMode.Open, FileAccess.Read, FileShare.Read, 131072);
+            byte[] tik = CiaFormatInspector.ReadBytesAt(fs, report.TicketOffset, (int)report.TicketSize);
+
+            using Stream decMain = CiaFormatInspector.OpenDecryptedContentStream(fs, tik, mainChunk, keyStore, out _);
+            byte[] ncchHdr = CiaFormatInspector.ReadBytesAt(decMain, 0, 0x200);
+            long romfsOff = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr.AsSpan(0x1B0, 4)) * CiaConstants.NcchMediaUnitSize;
+            long romfsLen = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(ncchHdr.AsSpan(0x1B4, 4)) * CiaConstants.NcchMediaUnitSize;
+
+            using var romfsStream = new SubReadStream(decMain, romfsOff, romfsLen, leaveOpen: true);
+            var inv = IvfcRomFsReader.ReadInventory(romfsStream);
+            var ieEntry = inv.Files.FirstOrDefault(f => f.RelativePath.Equals("ie_a.fa", StringComparison.OrdinalIgnoreCase))
+                ?? throw new FileNotFoundException("No se encontró 'ie_a.fa' dentro del RomFS del .cia.");
+
+            IvfcRomFsReader.ExtractFileToDisk(romfsStream, ieEntry, destinationIeaPath);
         }
 
         private static string ResolveIeAFaInDirectory(string rootDir)

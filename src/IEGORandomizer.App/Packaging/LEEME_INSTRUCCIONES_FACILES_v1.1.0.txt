@@ -1,0 +1,75 @@
+========================================================================
+  IEGO RANDOMIZER v1.1.0 — GUIA RAPIDA PARA WINDOWS (.CIA + LAYEREDFS)
+  Para Inazuma Eleven GO: Luz y Sombra (Compatible con V.0.0.0)
+========================================================================
+
+Este paquete incluye todo dentro de "IEGORandomizer.exe" (self-contained).
+NO necesitas instalar .NET ni subir tu ROM a ningun servicio externo.
+Tu archivo .cia original NUNCA se modifica (verificado por SHA-256).
+La version clasica v1.0.2 sigue 100% disponible dentro del programa y en
+el repositorio sin haberse eliminado ni sobrescrito.
+
+------------------------------------------------------------------------
+PASO 1: ABRIR EL PROGRAMA EN TU PC
+------------------------------------------------------------------------
+1. Extrae este ZIP en cualquier carpeta de tu PC.
+2. Haz doble clic en "IEGORandomizer.exe".
+3. Se abrira automaticamente la ventana de escritorio de IEGO Randomizer
+   v1.1.0 con 3 pestañas de modo de trabajo en la parte superior.
+
+------------------------------------------------------------------------
+MODO 1 (PRINCIPAL): .CIA ORIGINAL -> RANDOMIZAR -> NUEVO .CIA
+------------------------------------------------------------------------
+1. Deja seleccionada la pestaña "Modo 1: .cia -> Nuevo .cia".
+2. Pulsa "Elegir .cia..." y selecciona tu archivo .cia original local
+   (por ejemplo, "Inazuma Eleven GO Luz V.0.0.0.cia").
+   - El programa inspeccionara localmente sus cabeceras TMD/Ticket/NCCH
+     en modo de solo lectura y te mostrara al instante la version
+     (V.0.0.0), el estado de cifrado y los archivos de la RomFS.
+   - Si tu .cia fuera una copia cifrada y no usas Citra/Azahar, despliega
+     "Opcional: Ruta local a aes_keys.txt" o exporta tu .cia como
+     "Standard Decrypted CIA" desde GodMode9 en tu 3DS.
+3. Revisa la ruta de salida sugerida ("..._Randomizado.cia") o cambiala
+   con "Guardar como..." (siempre en una ruta distinta al original).
+4. Ajusta las opciones de randomizacion y semilla (o dejalo por defecto)
+   y pulsa "Randomizar .cia y Generar Nuevo .cia Verificado".
+
+------------------------------------------------------------------------
+MODO 2: .CIA ORIGINAL + CARPETA ROMFS MODIFICADA -> NUEVO .CIA
+------------------------------------------------------------------------
+1. Selecciona la pestaña "Modo 2: .cia + RomFS -> .cia".
+2. Elige tu archivo .cia original (solo lectura).
+3. Elige la carpeta RomFS ya modificada (por ejemplo, una carpeta
+   "romfs" generada previamente por v1.0.2 o editada con otras
+   herramientas). Se incorporaran TODOS los archivos y subcarpetas de esa
+   RomFS sobre el 100% de archivos originales restantes del .cia.
+4. Elige donde guardar el nuevo .cia y pulsa
+   "Fusionar Carpeta RomFS + .cia y Verificar Nuevo .cia".
+
+------------------------------------------------------------------------
+MODO 3 (CLASICO v1.0.2): .3DS / ROMFS / IE_A.FA -> LAYEREDFS
+------------------------------------------------------------------------
+Conserva intacto todo el flujo clasico de v1.0.2 para exportar paquetes
+LayeredFS de Citra / Azahar / Lime3DS y Luma3DS.
+
+------------------------------------------------------------------------
+COMPATIBILIDAD REAL DE INSTALACION DEL NUEVO .CIA (IMPORTANTE)
+------------------------------------------------------------------------
+1. CONSOLA NINTENDO 3DS / 2DS:
+   - Al modificar cualquier contenido interno, las firmas privadas
+     RSA-2048 de Nintendo dejan de coincidir.
+   - En consolas con Custom Firmware (Luma3DS + FBI / GodMode9): el
+     nuevo .cia es 100% instalable y ejecutable (TMD, NCCH, SaveDataSize
+     de 512 KB, contenidos secundarios e IVFC SHA-256 de 4 niveles
+     verificados en frio).
+   - En consolas 100% de fabrica (Stock OFW sin CFW): el sistema
+     rechazara cualquier .cia modificado por firma RSA.
+2. EMULADORES (CITRA / AZAHAR / LIME3DS):
+   - El nuevo .cia se genera como "Standard Decrypted Plain CIA"
+     (NoCrypto), por lo que puedes instalarlo directamente desde
+     "Archivo -> Instalar archivo CIA..." sin necesitar claves extra.
+   - AVISO: Si tenias un mod antiguo en "%APPDATA%\Citra\load\mods\",
+     desactivalo o muevelo para que no oculte la RomFS del nuevo .cia.
+   - Inicia "PARTIDA NUEVA" para ver las nuevas supertecnicas iniciales
+     en los jugadores iniciales del Raimon.
+========================================================================

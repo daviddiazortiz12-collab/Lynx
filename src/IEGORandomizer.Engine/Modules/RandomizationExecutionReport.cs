@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using IEGORandomizer.Engine.Validation;
 using Lynx.Core.RomFs;
+using Lynx.Core.RomFs.Cia;
 
 namespace IEGORandomizer.Engine.Modules
 {
@@ -52,6 +53,8 @@ namespace IEGORandomizer.Engine.Modules
         public bool OutputIntegrityVerified { get; set; }
         public Arc0SaveSummary Arc0WriteTelemetry { get; set; }
         public PersistedArchiveDiffSummary PersistedDiffTelemetry { get; set; }
+        public CiaRebuildTelemetry CiaBuildTelemetry { get; set; }
+        public CiaVerificationResult CiaVerification { get; set; }
         public string DirectCitraInstalledPath { get; set; } = string.Empty;
 
         public List<string> ExportedPaths { get; } = new();

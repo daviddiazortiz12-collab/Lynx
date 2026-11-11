@@ -12,8 +12,8 @@
       <div class="brand">
         <div class="brand-emblem">⚡</div>
         <div>
-          <h1>IEGO Randomizer <span style="font-size:0.75rem;opacity:0.8;font-weight:600;">v1.0.2</span></h1>
-          <p class="subtitle">Generador determinista para <strong>Inazuma Eleven GO: Luz y Sombra</strong> (PC / Citra / LayeredFS)</p>
+          <h1>IEGO Randomizer <span style="font-size:0.78rem;color:#fbbf24;font-weight:700;">v1.1.0</span></h1>
+          <p class="subtitle">Generador determinista para <strong>Inazuma Eleven GO: Luz y Sombra</strong> (Flujo Nativo <code>.cia</code> + Modo Clásico <code>v1.0.2</code>)</p>
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -29,21 +29,73 @@
       <section class="panel-column">
         <div class="card">
           <div class="card-header">
-            <h2>1. Archivos del Juego y Destino</h2>
-            <span class="tag">PC Local</span>
+            <h2>1. Modo de Trabajo, Archivos y Destino</h2>
+            <span class="tag">100% Local</span>
           </div>
 
-          <label class="field-label" for="inputPath">Entrada del juego (<code>.3ds</code> desencriptado, carpeta <code>RomFS</code> o <code>ie_a.fa</code>)</label>
-          <div class="input-row">
-            <input id="inputPath" type="text" placeholder="Ej: C:\Juegos\IEGO\ie_a.fa o RomFS..." autocomplete="off" />
-            <button type="button" class="btn btn-secondary" id="btnPickInputFile">Archivo…</button>
-            <button type="button" class="btn btn-secondary" id="btnPickInputFolder">Carpeta…</button>
-          </div>
-          <div id="inputInspectBadge" class="inspect-status neutral">
-            Selecciona una entrada para verificar formato, edición y protección de lectura.
+          <div class="workflow-tabs" role="tablist">
+            <button type="button" class="workflow-tab active" data-wmode="cia-randomize" id="tabModeCiaRandomize">
+              <span class="workflow-tab-title">📦 Modo 1: .cia → Nuevo .cia</span>
+              <span class="workflow-tab-desc">Selecciona tu <code>.cia</code> original (ej. Luz V.0.0.0), randomiza y genera un nuevo <code>.cia</code> verificado.</span>
+            </button>
+            <button type="button" class="workflow-tab" data-wmode="cia-merge" id="tabModeCiaMerge">
+              <span class="workflow-tab-title">🧩 Modo 2: .cia + RomFS → .cia</span>
+              <span class="workflow-tab-desc">Combina tu <code>.cia</code> original con una carpeta <code>RomFS</code> ya modificada (todos sus archivos).</span>
+            </button>
+            <button type="button" class="workflow-tab" data-wmode="classic" id="tabModeClassic">
+              <span class="workflow-tab-title">📁 Clásico v1.0.2 (LayeredFS)</span>
+              <span class="workflow-tab-desc">Entrada <code>.3ds</code> / <code>RomFS</code> / <code>ie_a.fa</code> → mod Citra, Azahar o Luma3DS.</span>
+            </button>
           </div>
 
-          <div class="two-col">
+          <!-- CIA MODES PANEL (Modes 1 & 2) -->
+          <div id="ciaPathsSection">
+            <label class="field-label" for="sourceCiaPath">Archivo <code>.cia</code> original local (solo lectura garantizada por SHA-256)</label>
+            <div class="input-row">
+              <input id="sourceCiaPath" type="text" placeholder="Ej: C:\ROMs\Inazuma Eleven GO Luz (EUR) V.0.0.0.cia" autocomplete="off" />
+              <button type="button" class="btn btn-secondary" id="btnPickSourceCia">Elegir .cia…</button>
+              <button type="button" class="btn btn-ghost" id="btnInspectLocalCia">Inspeccionar</button>
+            </div>
+
+            <div id="mergeRomFsRow" class="hidden">
+              <label class="field-label" for="modifiedRomFsDir">Carpeta <code>RomFS</code> modificada (se incorporarán <strong>todos</strong> sus archivos y subcarpetas)</label>
+              <div class="input-row">
+                <input id="modifiedRomFsDir" type="text" placeholder="Ej: C:\Juegos\IEGO_Output\Citra\load\mods\0004000000112F00\romfs" autocomplete="off" />
+                <button type="button" class="btn btn-secondary" id="btnPickModifiedRomFs">Carpeta RomFS…</button>
+              </div>
+            </div>
+
+            <label class="field-label" for="outputCiaPath">Ruta del <strong>nuevo archivo <code>.cia</code></strong> de salida (nunca sobrescribe el original)</label>
+            <div class="input-row">
+              <input id="outputCiaPath" type="text" placeholder="Ej: C:\ROMs\Inazuma Eleven GO Luz_Randomizado.cia" autocomplete="off" />
+              <button type="button" class="btn btn-secondary" id="btnPickOutputCia">Guardar como…</button>
+            </div>
+
+            <details class="keys-details">
+              <summary>🔑 Opcional: Ruta local a <code>aes_keys.txt</code> (solo si tu <code>.cia</code> está cifrado y no usas Citra/Azahar)</summary>
+              <div class="input-row" style="margin-top:8px;">
+                <input id="aesKeysPath" type="text" placeholder="Autodetección en Citra\sysdata\aes_keys.txt o Azahar\sysdata\aes_keys.txt" autocomplete="off" />
+                <button type="button" class="btn btn-secondary" id="btnPickAesKeys">Elegir…</button>
+              </div>
+            </details>
+
+            <div id="ciaInspectBox" class="cia-inspect-box hidden"></div>
+          </div>
+
+          <!-- CLASSIC v1.0.2 PANEL -->
+          <div id="classicPathsSection" class="hidden">
+            <label class="field-label" for="inputPath">Entrada del juego (<code>.3ds</code> desencriptado, carpeta <code>RomFS</code>, <code>ie_a.fa</code> o <code>.cia</code>)</label>
+            <div class="input-row">
+              <input id="inputPath" type="text" placeholder="Ej: C:\Juegos\IEGO\ie_a.fa o RomFS..." autocomplete="off" />
+              <button type="button" class="btn btn-secondary" id="btnPickInputFile">Archivo…</button>
+              <button type="button" class="btn btn-secondary" id="btnPickInputFolder">Carpeta…</button>
+            </div>
+            <div id="inputInspectBadge" class="inspect-status neutral">
+              Selecciona una entrada para verificar formato, edición y protección de lectura.
+            </div>
+          </div>
+
+          <div class="two-col" id="editionTitleRow">
             <div>
               <label class="field-label" for="editionSelect">Edición del juego</label>
               <select id="editionSelect">
@@ -52,21 +104,24 @@
                 <option value="Shadow">Inazuma Eleven GO: Sombra (0004000000113000)</option>
               </select>
             </div>
-            <div>
+            <div id="titleIdOverrideCol" class="hidden">
               <label class="field-label" for="titleIdOverride">Title ID LayeredFS (opcional)</label>
               <select id="titleIdOverride">
                 <option value="">Automático según edición / cabecera .3ds</option>
                 <option value="0004000000112F00">Luz EUR — 0004000000112F00</option>
+                <option value="000400000017C100">Luz EUR (Alt) — 000400000017C100</option>
                 <option value="0004000000113000">Sombra EUR (Estándar) — 0004000000113000</option>
                 <option value="000400000017C200">Sombra EUR (Alt/Rev) — 000400000017C200</option>
               </select>
             </div>
           </div>
 
-          <label class="field-label" for="outputDir">Carpeta de salida (independiente del archivo original)</label>
-          <div class="input-row">
-            <input id="outputDir" type="text" placeholder="Ej: C:\Juegos\IEGO_Randomizer_Output\Run_01" autocomplete="off" />
-            <button type="button" class="btn btn-secondary" id="btnPickOutputFolder">Elegir carpeta…</button>
+          <div id="classicOutputSection" class="hidden">
+            <label class="field-label" for="outputDir">Carpeta de salida (independiente del archivo original)</label>
+            <div class="input-row">
+              <input id="outputDir" type="text" placeholder="Ej: C:\Juegos\IEGO_Randomizer_Output\Run_01" autocomplete="off" />
+              <button type="button" class="btn btn-secondary" id="btnPickOutputFolder">Elegir carpeta…</button>
+            </div>
           </div>
 
           <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
@@ -78,7 +133,7 @@
           <div id="diagnosticResultBox" class="result-box hidden" style="margin-top:10px;"></div>
         </div>
 
-        <div class="card">
+        <div class="card" id="seedBlindCard">
           <div class="card-header">
             <h2>2. Semilla (Seed) y Modo a Ciegas</h2>
             <span class="tag tag-accent">Determinista</span>
@@ -109,9 +164,9 @@
           </div>
         </div>
 
-        <div class="card">
+        <div class="card hidden" id="classicExportCard">
           <div class="card-header">
-            <h2>3. Formatos de Exportación</h2>
+            <h2>3. Formatos de Exportación (Modo Clásico LayeredFS)</h2>
             <span class="tag">Sin tocar consola</span>
           </div>
           <div class="check-grid">
@@ -145,11 +200,24 @@
       <!-- Right Column: Subsystems & Execution -->
       <section class="panel-column">
         <div class="card">
-          <div class="card-header">
+          <div class="card-header" id="categoriesHeader">
             <h2>4. Categorías a Randomizar</h2>
             <span class="tag">Subgeneradores aislados</span>
           </div>
 
+          <div id="mergeExplainBox" class="subsystem-box hidden" style="margin-bottom:14px;">
+            <div style="font-weight:700;margin-bottom:6px;color:#fbbf24;">🧩 Modo 2 Activo: Combinación Directa de .cia Original + Carpeta RomFS Modificada</div>
+            <p style="margin:0 0 8px;font-size:0.86rem;line-height:1.5;color:var(--text);">
+              En este modo <strong>no se vuelve a randomizar</strong> el juego: se abre tu <code>.cia</code> original en modo de solo lectura y se incorporan <strong>todos los archivos y subcarpetas</strong> presentes en la carpeta <code>RomFS</code> modificada que indiques.
+            </p>
+            <ul style="margin:0;padding-left:18px;font-size:0.84rem;line-height:1.5;color:var(--muted);">
+              <li>Preserva el <strong>100% de los archivos originales restantes</strong> de la <code>RomFS</code> del <code>.cia</code> (<code>fix.xr</code>, <code>banner.icn</code>, sonidos <code>snd/</code>, vídeos <code>movie/</code>, etc.).</li>
+              <li>Preserva contenidos secundarios (Manual electrónico, Download Play), el icono <code>SMDH</code> y el <code>SaveDataSize</code> del <code>TMD</code>.</li>
+              <li>Reconstruye el árbol Merkle <strong>IVFC de 4 niveles (SHA-256)</strong> y verifica en frío cada bloque antes de guardar el nuevo <code>.cia</code>.</li>
+            </ul>
+          </div>
+
+          <div id="allSubsystemsWrapper">
           <!-- A. Players -->
           <div class="subsystem-box">
             <label class="subsystem-title">
@@ -244,10 +312,12 @@
             </div>
           </div>
 
+          </div>
+
           <!-- Generate CTA + Progress + Validation Viewer -->
           <div class="generate-box">
             <button type="button" class="btn btn-primary btn-large" id="btnGenerate">
-              ⚡ Generar Run Randomizada
+              ⚡ Randomizar .cia y Generar Nuevo .cia Verificado
             </button>
 
             <div id="progressArea" class="progress-area hidden">

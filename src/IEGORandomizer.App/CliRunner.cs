@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text.Json;
 using IEGORandomizer.Engine;
+using IEGORandomizer.Engine.Cia;
 using IEGORandomizer.Engine.Configuration;
 using IEGORandomizer.Engine.Diagnostics;
 using Lynx.Core.RomFs;
@@ -9,7 +10,7 @@ using Lynx.Core.RomFs;
 namespace IEGORandomizer.App
 {
     /// <summary>
-    /// Headless command-line runner for batch execution, local diagnostics, and automated testing.
+    /// Headless command-line runner for batch execution, local .cia workflows, local diagnostics, and automated testing.
     /// </summary>
     public static class CliRunner
     {
@@ -17,6 +18,11 @@ namespace IEGORandomizer.App
         {
             string inputPath = null;
             string outputDir = null;
+            string outputCiaPath = null;
+            string inspectCiaPath = null;
+            string mergeSourceCiaPath = null;
+            string mergeRomFsDir = null;
+            string exportDiagJsonPath = null;
             string configJsonPath = null;
             bool diagnoseMode = false;
             bool jsonOutput = false;
@@ -42,6 +48,24 @@ namespace IEGORandomizer.App
                     case "--output":
                     case "-o":
                         if (i + 1 < args.Length) outputDir = args[++i];
+                        break;
+                    case "--output-cia":
+                        if (i + 1 < args.Length) outputCiaPath = args[++i];
+                        break;
+                    case "--inspect-cia":
+                        if (i + 1 < args.Length) inspectCiaPath = args[++i];
+                        break;
+                    case "--merge-cia":
+                        if (i + 1 < args.Length) mergeSourceCiaPath = args[++i];
+                        break;
+                    case "--romfs":
+                        if (i + 1 < args.Length) mergeRomFsDir = args[++i];
+                        break;
+                    case "--aes-keys":
+                        if (i + 1 < args.Length) options.AesKeysPath = args[++i];
+                        break;
+                    case "--export-diag":
+                        if (i + 1 < args.Length) exportDiagJsonPath = args[++i];
                         break;
                     case "--seed":
                     case "-s":
@@ -88,13 +112,42 @@ namespace IEGORandomizer.App
                 return RunDiagnosticCli(inputPath, options.Edition, outputDir, jsonOutput);
             }
 
+            if (!string.IsNullOrWhiteSpace(inspectCiaPath))
+            {
+                return RunInspectCiaCli(inspectCiaPath, options.AesKeysPath, exportDiagJsonPath, jsonOutput);
+            }
+
+            if (!string.IsNullOrWhiteSpace(mergeSourceCiaPath))
+            {
+                string targetMergeCia = !string.IsNullOrWhiteSpace(outputCiaPath) ? outputCiaPath : outputDir;
+                return RunMergeCiaCli(mergeSourceCiaPath, mergeRomFsDir, targetMergeCia, options.AesKeysPath);
+            }
+
             if (!string.IsNullOrWhiteSpace(configJsonPath) && File.Exists(configJsonPath))
             {
                 string rawJson = File.ReadAllText(configJsonPath);
+                string savedKeys = options.AesKeysPath;
                 options = JsonSerializer.Deserialize<RandomizerOptions>(rawJson, new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = true
                 }) ?? options;
+                if (!string.IsNullOrWhiteSpace(savedKeys))
+                    options.AesKeysPath = savedKeys;
+            }
+
+            string resolvedOutCia = outputCiaPath;
+            if (string.IsNullOrWhiteSpace(resolvedOutCia) &&
+                !string.IsNullOrWhiteSpace(inputPath) &&
+                inputPath.EndsWith(".cia", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(outputDir) &&
+                outputDir.EndsWith(".cia", StringComparison.OrdinalIgnoreCase))
+            {
+                resolvedOutCia = outputDir;
+            }
+
+            if (!string.IsNullOrWhiteSpace(resolvedOutCia))
+            {
+                return RunRandomizeCiaCli(inputPath, resolvedOutCia, options);
             }
 
             if (string.IsNullOrWhiteSpace(inputPath) || string.IsNullOrWhiteSpace(outputDir))
@@ -208,20 +261,170 @@ namespace IEGORandomizer.App
 
         public static void PrintHelp()
         {
-            Console.WriteLine("Uso:");
-            Console.WriteLine("  IEGORandomizer                           Inicia la interfaz gráfica de escritorio (PC)");
-            Console.WriteLine("  IEGORandomizer --cli -i <entrada> -o <carpeta_salida> [opciones]");
+            Console.WriteLine("Uso (IEGO Randomizer v1.1.0):");
+            Console.WriteLine("  IEGORandomizer                                                         Inicia la interfaz gráfica de escritorio (PC)");
+            Console.WriteLine("  IEGORandomizer -i <original.cia> --output-cia <nuevo.cia> [opciones]   Modo Principal: .cia -> randomizar -> nuevo .cia");
+            Console.WriteLine("  IEGORandomizer --merge-cia <original.cia> --romfs <dir> --output-cia <nuevo.cia>  Segundo Modo: .cia + carpeta RomFS -> nuevo .cia");
+            Console.WriteLine("  IEGORandomizer --inspect-cia <original.cia> [--export-diag <out.json>] Inspección local de solo lectura del .cia");
+            Console.WriteLine("  IEGORandomizer --cli -i <entrada> -o <carpeta_salida> [opciones]       Modo Clásico v1.0.2 (LayeredFS / Citra / Luma)");
             Console.WriteLine("  IEGORandomizer --diagnose -i <entrada> [-o <carpeta_salida_o_citra>] [--json]");
             Console.WriteLine();
             Console.WriteLine("Opciones CLI:");
-            Console.WriteLine("  -i, --input <ruta>           Ruta al archivo .3ds desencriptado, carpeta RomFS o ie_a.fa");
-            Console.WriteLine("  -o, --output <carpeta>       Carpeta de destino separada para los archivos generados");
+            Console.WriteLine("  -i, --input <ruta>           Ruta al archivo .cia, .3ds desencriptado, carpeta RomFS o ie_a.fa");
+            Console.WriteLine("  --output-cia <nuevo.cia>     Ruta del nuevo archivo .cia verificado de salida");
+            Console.WriteLine("  --romfs <carpeta_romfs>      Carpeta RomFS modificada cuyos archivos se fusionarán en el .cia");
+            Console.WriteLine("  --aes-keys <aes_keys.txt>    Ruta opcional a aes_keys.txt local si el .cia está cifrado");
+            Console.WriteLine("  -o, --output <carpeta>       Carpeta de destino separada (modo clásico LayeredFS)");
             Console.WriteLine("  -s, --seed <texto>           Semilla manual reproducible (opcional)");
             Console.WriteLine("  -e, --edition <modo>         auto | luz | sombra");
             Console.WriteLine("  --install-citra [ruta_mods]  Instala también romfs/ie_a.fa directo en los mods de Citra");
             Console.WriteLine("  --diagnose                   Analiza el archivo/RomFS y verifica la carpeta de mods de Citra");
             Console.WriteLine("  --no-blind                   Desactiva el modo a ciegas y escribe spoiler_log.txt");
             Console.WriteLine("  --config <json>              Carga opciones avanzadas desde un archivo JSON");
+        }
+
+        private static int RunInspectCiaCli(string ciaPath, string aesKeysPath, string exportDiagPath, bool jsonOutput)
+        {
+            try
+            {
+                var svc = new CiaWorkflowService();
+                var rep = svc.InspectLocalCia(ciaPath, aesKeysPath, computeFullSha256: true);
+                if (!string.IsNullOrWhiteSpace(exportDiagPath))
+                {
+                    svc.SaveRomFreeDiagnosticJson(rep, exportDiagPath);
+                }
+
+                if (jsonOutput)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(rep, new JsonSerializerOptions { WriteIndented = true }));
+                    return rep.IsValidCiaStructure ? 0 : 1;
+                }
+
+                Console.WriteLine("================================================================");
+                Console.WriteLine("  IEGO RANDOMIZER v1.1.0 — INSPECCIÓN LOCAL .CIA (SOLO LECTURA)");
+                Console.WriteLine("================================================================");
+                Console.WriteLine($"  Archivo analizado : {rep.FilePath} ({rep.FileSizeBytes:N0} B)");
+                Console.WriteLine($"  SHA-256 original  : {rep.Sha256Hex}");
+                Console.WriteLine($"  Estructura CIA    : {(rep.IsValidCiaStructure ? "VÁLIDA" : "INVÁLIDA")}");
+                Console.WriteLine($"  Estado de cifrado : {rep.EncryptionKind}");
+                Console.WriteLine($"  Procesable ahora  : {(rep.CanProcessNow ? "SÍ" : "NO")}");
+                Console.WriteLine($"  TitleID / Versión : {rep.TmdTitleIdHex} | {rep.TmdTitleVersionFormatted} (0x{rep.TmdTitleVersionRaw:X4})");
+                Console.WriteLine($"  Edición / Código  : {rep.DetectedEdition} / {rep.ProductCode}");
+                Console.WriteLine($"  SaveDataSize TMD  : {rep.SaveDataSizeBytes / 1024} KB | Contenidos: {rep.ContentCount}");
+                if (rep.RomFsReadable)
+                {
+                    Console.WriteLine($"  Inventario RomFS  : {rep.RomFsFileCount} archivos en {rep.RomFsDirectoryCount} carpetas (ie_a.fa={rep.HasIeAFa}, fix.xr={rep.HasFixXr})");
+                }
+                foreach (string f in rep.Findings) Console.WriteLine($"  [OK] {f}");
+                foreach (string w in rep.LimitationsAndWarnings) Console.WriteLine($"  [INFO] {w}");
+                if (!string.IsNullOrWhiteSpace(exportDiagPath))
+                    Console.WriteLine($"  Informe sin ROM   : {Path.GetFullPath(exportDiagPath)}");
+                return rep.IsValidCiaStructure ? 0 : 1;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ERROR INSPECCIÓN .CIA] {ex.Message}");
+                return 1;
+            }
+        }
+
+        private static int RunRandomizeCiaCli(string sourceCiaPath, string outputCiaPath, RandomizerOptions options)
+        {
+            if (string.IsNullOrWhiteSpace(sourceCiaPath) || string.IsNullOrWhiteSpace(outputCiaPath))
+            {
+                Console.Error.WriteLine("Error: Debe indicar -i <original.cia> y --output-cia <nuevo.cia>.");
+                return 2;
+            }
+
+            try
+            {
+                Console.WriteLine("================================================================");
+                Console.WriteLine("  IEGO RANDOMIZER v1.1.0 — MODO PRINCIPAL (.CIA -> NUEVO .CIA)");
+                Console.WriteLine("================================================================");
+
+                var svc = new CiaWorkflowService();
+                int lastPct = -1;
+                string lastStage = string.Empty;
+                var progress = new Progress<RandomizerProgressStep>(step =>
+                {
+                    if (step.Percent > lastPct ||
+                        (step.Stage != lastStage &&
+                         !step.Stage.StartsWith("Empaquetando RomFS") &&
+                         !step.Stage.StartsWith("Escribiendo archivo ARC0")))
+                    {
+                        lastPct = Math.Max(lastPct, step.Percent);
+                        lastStage = step.Stage;
+                        Console.WriteLine($"[{lastPct,3}%] {step.Stage}");
+                    }
+                });
+
+                var report = svc.RandomizeCiaToCia(sourceCiaPath, outputCiaPath, options, progress);
+                var t = report.CiaBuildTelemetry;
+                var v = report.CiaVerification;
+
+                Console.WriteLine();
+                Console.WriteLine("Nuevo archivo .cia generado y verificado en frío:");
+                Console.WriteLine($"  Semilla (Seed)          : {report.Seed} (Huella: {report.SeedFingerprint})");
+                Console.WriteLine($"  Edición / Title ID      : {report.EffectiveEdition} ({t.TitleIdHex} | {t.TitleVersionFormatted})");
+                Console.WriteLine($"  Original sin modificar  : SÍ (SHA-256 idéntico: {t.SourceCiaSha256Hex})");
+                Console.WriteLine($"  Nuevo .cia generado     : {t.OutputCiaPath} ({t.OutputCiaSizeBytes:N0} B)");
+                Console.WriteLine($"  SHA-256 nuevo .cia      : {t.OutputCiaSha256Hex}");
+                Console.WriteLine($"  RomFS preservada total  : {t.OutputRomFsFileCount} archivos (original: {t.SourceRomFsFileCount})");
+                Console.WriteLine($"  Verificación IVFC/TMD   : {(v.IsValid ? "SUPERADA" : "ERROR")} ({v.VerifiedIvfcBlocksCount} bloques SHA-256, {t.PreservedContentsCount} contenidos)");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine();
+                Console.Error.WriteLine($"[ERROR] {ex.Message}");
+                return 1;
+            }
+        }
+
+        private static int RunMergeCiaCli(string sourceCiaPath, string modRomFsDir, string outputCiaPath, string aesKeysPath)
+        {
+            if (string.IsNullOrWhiteSpace(sourceCiaPath) || string.IsNullOrWhiteSpace(modRomFsDir) || string.IsNullOrWhiteSpace(outputCiaPath))
+            {
+                Console.Error.WriteLine("Error: Debe indicar --merge-cia <original.cia> --romfs <carpeta_romfs> --output-cia <nuevo.cia>.");
+                return 2;
+            }
+
+            try
+            {
+                Console.WriteLine("================================================================");
+                Console.WriteLine("  IEGO RANDOMIZER v1.1.0 — MODO 2 (.CIA + ROMFS -> NUEVO .CIA)");
+                Console.WriteLine("================================================================");
+
+                var svc = new CiaWorkflowService();
+                int lastPct = -1;
+                var progress = new Progress<RandomizerProgressStep>(step =>
+                {
+                    if (step.Percent > lastPct)
+                    {
+                        lastPct = step.Percent;
+                        Console.WriteLine($"[{lastPct,3}%] {step.Stage}");
+                    }
+                });
+
+                var res = svc.MergeModifiedRomFsIntoCia(sourceCiaPath, modRomFsDir, outputCiaPath, aesKeysPath, progress);
+                var t = res.RebuildTelemetry;
+                var v = res.Verification;
+
+                Console.WriteLine();
+                Console.WriteLine("Fusión de carpeta RomFS + .cia completada y verificada en frío:");
+                Console.WriteLine($"  Original sin modificar  : SÍ (SHA-256 idéntico: {t.SourceCiaSha256Hex})");
+                Console.WriteLine($"  Archivos incorporados   : {t.OverlaidModifiedRomFsFilesCount} archivo(s) desde {res.ModifiedRomFsDirectory}");
+                Console.WriteLine($"  RomFS final en el .cia  : {t.OutputRomFsFileCount} archivos totales (original: {t.SourceRomFsFileCount})");
+                Console.WriteLine($"  Nuevo .cia generado     : {t.OutputCiaPath} ({t.OutputCiaSizeBytes:N0} B)");
+                Console.WriteLine($"  Verificación IVFC/TMD   : {(v.IsValid ? "SUPERADA" : "ERROR")} ({v.VerifiedIvfcBlocksCount} bloques SHA-256)");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine();
+                Console.Error.WriteLine($"[ERROR] {ex.Message}");
+                return 1;
+            }
         }
     }
 }

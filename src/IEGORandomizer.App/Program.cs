@@ -10,9 +10,11 @@ using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using IEGORandomizer.App;
 using IEGORandomizer.App.Services;
+using IEGORandomizer.Engine.Cia;
 using IEGORandomizer.Engine.Diagnostics;
 using IEGORandomizer.Engine.Seeding;
 using Lynx.Core.RomFs;
+using Lynx.Core.RomFs.Cia;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -20,9 +22,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-// Run CLI mode when --cli, --diagnose, or -i/--input is passed on the command line
+// Run CLI mode when --cli, --diagnose, --inspect-cia, --merge-cia, or -i/--input is passed on the command line
 if (args.Any(a => a.Equals("--cli", StringComparison.OrdinalIgnoreCase) ||
                   a.Equals("--diagnose", StringComparison.OrdinalIgnoreCase) ||
+                  a.Equals("--inspect-cia", StringComparison.OrdinalIgnoreCase) ||
+                  a.Equals("--merge-cia", StringComparison.OrdinalIgnoreCase) ||
                   a.Equals("--input", StringComparison.OrdinalIgnoreCase) ||
                   a.Equals("-i", StringComparison.OrdinalIgnoreCase) ||
                   a.Equals("--help", StringComparison.OrdinalIgnoreCase) ||
@@ -77,6 +81,7 @@ builder.Services.ConfigureHttpJsonOptions(opts =>
 });
 
 builder.Services.AddSingleton<JobManager>();
+builder.Services.AddSingleton<CiaWorkflowService>();
 
 var app = builder.Build();
 
@@ -95,7 +100,8 @@ app.MapGet("/app.js", () => ServeEmbeddedOrPhysicalAsset(resolvedWwwroot, "app.j
 app.MapGet("/api/health", () => Results.Ok(new
 {
     status = "ok",
-    version = "1.0.2",
+    version = "1.1.0",
+    preservedBaseline = "1.0.2",
     app = "IEGO Randomizer (Inazuma Eleven GO: Luz y Sombra)",
     platform = Environment.OSVersion.Platform.ToString()
 }));
@@ -117,14 +123,47 @@ app.MapGet("/api/fs/list", (string path, bool? dirsOnly) =>
     return Results.Ok(listing);
 });
 
-app.MapPost("/api/fs/pick-native", (string mode) =>
+app.MapPost("/api/fs/pick-native", (string mode, string suggestedName) =>
 {
-    string picked = DesktopDialogHelper.TryPickNativeWindowsDialog(mode ?? "file");
+    string picked = DesktopDialogHelper.TryPickNativeWindowsDialog(mode ?? "file", suggestedName);
     return Results.Ok(new
     {
         supported = OperatingSystem.IsWindows(),
         selectedPath = picked
     });
+});
+
+app.MapPost("/api/cia/inspect", async (HttpContext ctx, CiaWorkflowService ciaService) =>
+{
+    var body = await ctx.Request.ReadFromJsonAsync<CiaInspectRequest>();
+    string ciaPath = body?.CiaPath?.Trim() ?? string.Empty;
+    if (string.IsNullOrWhiteSpace(ciaPath))
+    {
+        return Results.BadRequest(new { error = "Introduce o selecciona la ruta local de tu archivo .cia." });
+    }
+
+    try
+    {
+        var report = ciaService.InspectLocalCia(ciaPath, body?.AesKeysPath, body?.ComputeSha256 ?? false);
+        string exportedDiag = string.Empty;
+        if (!string.IsNullOrWhiteSpace(body?.ExportDiagnosticJsonPath))
+        {
+            ciaService.SaveRomFreeDiagnosticJson(report, body.ExportDiagnosticJsonPath.Trim());
+            exportedDiag = Path.GetFullPath(body.ExportDiagnosticJsonPath.Trim());
+        }
+
+        return Results.Ok(new
+        {
+            valid = report.IsValidCiaStructure,
+            canProcessNow = report.CanProcessNow,
+            exportedDiagnosticJsonPath = exportedDiag,
+            report
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
 });
 
 app.MapPost("/api/app/open-folder", async (HttpContext ctx) =>
@@ -222,6 +261,31 @@ app.MapPost("/api/inspect", async (HttpContext ctx) =>
             return Results.BadRequest(new { error = $"No se encontró el archivo o carpeta: {full}" });
         }
 
+        if (full.EndsWith(".cia", StringComparison.OrdinalIgnoreCase))
+        {
+            var keyStore = CtrKeyStore.LoadAvailableLocalKeys(body?.AesKeysPath);
+            var ciaRep = CiaFormatInspector.InspectFile(full, keyStore, computeFullFileSha256: false);
+            if (!ciaRep.IsValidCiaStructure || !ciaRep.CanProcessNow)
+            {
+                return Results.BadRequest(new
+                {
+                    error = string.Join(" ", ciaRep.LimitationsAndWarnings)
+                });
+            }
+
+            return Results.Ok(new
+            {
+                valid = true,
+                kind = GameInputKind.CtrImportableArchive.ToString(),
+                detectedEdition = ciaRep.DetectedEdition.ToString(),
+                titleId = ciaRep.TmdTitleIdHex,
+                productCode = ciaRep.ProductCode,
+                isEncrypted = false,
+                sizeBytes = ciaRep.FileSizeBytes,
+                summary = $"Archivo .cia ({ciaRep.TmdTitleVersionFormatted}, {ciaRep.EncryptionKind}) — {(ciaRep.FileSizeBytes / (1024.0 * 1024.0)):F1} MB — {ciaRep.RomFsFileCount} archivos en RomFS — Original protegido"
+            });
+        }
+
         var meta = Nintendo3dsRomReader.Inspect(full);
         var info = new FileInfo(full);
         if (meta.IsEncrypted)
@@ -309,6 +373,30 @@ app.MapPost("/api/jobs", (GenerateRunRequest request, JobManager jobs) =>
     return Results.Ok(state);
 });
 
+app.MapPost("/api/jobs/cia-randomize", (CiaRandomizeRunRequest request, JobManager jobs) =>
+{
+    if (request == null || string.IsNullOrWhiteSpace(request.SourceCiaPath))
+        return Results.BadRequest(new { error = "Debe seleccionar el archivo .cia original." });
+    if (string.IsNullOrWhiteSpace(request.OutputCiaPath))
+        return Results.BadRequest(new { error = "Debe indicar la ruta del nuevo archivo .cia de salida." });
+
+    var state = jobs.StartCiaRandomizeJob(request);
+    return Results.Ok(state);
+});
+
+app.MapPost("/api/jobs/cia-merge", (CiaMergeRunRequest request, JobManager jobs) =>
+{
+    if (request == null || string.IsNullOrWhiteSpace(request.SourceCiaPath))
+        return Results.BadRequest(new { error = "Debe seleccionar el archivo .cia original." });
+    if (string.IsNullOrWhiteSpace(request.ModifiedRomFsDirectory))
+        return Results.BadRequest(new { error = "Debe seleccionar la carpeta RomFS modificada." });
+    if (string.IsNullOrWhiteSpace(request.OutputCiaPath))
+        return Results.BadRequest(new { error = "Debe indicar la ruta del nuevo archivo .cia de salida." });
+
+    var state = jobs.StartCiaMergeJob(request);
+    return Results.Ok(state);
+});
+
 app.MapGet("/api/jobs/{jobId}", (string jobId, JobManager jobs) =>
 {
     var state = jobs.GetJob(jobId);
@@ -321,7 +409,7 @@ app.Lifetime.ApplicationStarted.Register(() =>
 {
     string localUrl = $"http://127.0.0.1:{port}";
     Console.WriteLine("================================================================");
-    Console.WriteLine("  IEGO RANDOMIZER v1.0.2 — Inazuma Eleven GO: Luz y Sombra");
+    Console.WriteLine("  IEGO RANDOMIZER v1.1.0 — Inazuma Eleven GO: Luz y Sombra");
     Console.WriteLine("================================================================");
     Console.WriteLine($"  Interfaz activa en : {localUrl}");
     Console.WriteLine("  Estado             : Listo (Mantén esta ventana abierta mientras usas el programa)");
@@ -382,6 +470,15 @@ static IResult ServeEmbeddedOrPhysicalAsset(string wwwrootDir, string fileName, 
 internal sealed class InspectPathRequest
 {
     public string InputPath { get; set; }
+    public string AesKeysPath { get; set; }
+}
+
+internal sealed class CiaInspectRequest
+{
+    public string CiaPath { get; set; }
+    public string AesKeysPath { get; set; }
+    public bool ComputeSha256 { get; set; }
+    public string ExportDiagnosticJsonPath { get; set; }
 }
 
 internal sealed class OpenFolderRequest

@@ -13,6 +13,11 @@ namespace IEGORandomizer.Engine.Configuration
         public string PreferredLanguageCode { get; set; } = "es";
 
         /// <summary>
+        /// Optional path to local user-supplied <c>aes_keys.txt</c> when opening encrypted .cia / NCCH dumps.
+        /// </summary>
+        public string AesKeysPath { get; set; } = string.Empty;
+
+        /// <summary>
         /// When enabled (default), suppresses spoiler details from the user-facing summary
         /// and does not write a spoiler log file so the user can play completely blind.
         /// </summary>
