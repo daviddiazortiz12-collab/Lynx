@@ -182,6 +182,48 @@ namespace IEGORandomizer.Engine.Modules
             var dribbleMoves = candidateActiveMoves.Where(s => whoSet.Contains(s.SkillHash)).ToList();
             var blockMoves = candidateActiveMoves.Where(s => whdSet.Contains(s.SkillHash)).ToList();
             var activeFieldMoves = candidateActiveMoves;
+            var nonSaveFieldMoves = shotMoves.Concat(dribbleMoves).Concat(blockMoves).ToList();
+            if (nonSaveFieldMoves.Count == 0)
+                nonSaveFieldMoves = activeFieldMoves;
+
+            // Solo (PartnerNumber <= 1) TP-affordable starter Shoot pool so early Raimon & Arion can ALWAYS shoot
+            // even in 1v1/2v2/5v5 pachangas without needing 2-3 co-op teammates or exhausting all PT on 1 kick!
+            var soloStarterShotMoves = shotMoves
+                .Where(s => s.PartnerNumber <= 1 && s.Power >= 35 && s.TPCost <= 45)
+                .ToList();
+            if (soloStarterShotMoves.Count == 0)
+                soloStarterShotMoves = shotMoves.Where(s => s.PartnerNumber <= 1).ToList();
+            if (soloStarterShotMoves.Count == 0)
+                soloStarterShotMoves = shotMoves.Count > 0 ? shotMoves : activeFieldMoves;
+
+            // Identify pure 5v5 Pachanga goal-slot players (who are NOT on any 11v11 team and NOT protected story chars)
+            // so they NEVER receive Level-1 Goalkeeper Save supertechniques (whkXXXX) in street pachangas!
+            var fullMatchRosterHashes = new HashSet<int>();
+            foreach (var st in game.GetStoryTeamsOnly())
+            {
+                if (st.Player6 == 0 || st.Player11 == 0)
+                    continue;
+                int[] stSlots =
+                {
+                    st.Player1, st.Player2, st.Player3, st.Player4, st.Player5, st.Player6, st.Player7, st.Player8,
+                    st.Player9, st.Player10, st.Player11, st.Player12, st.Player13, st.Player14, st.Player15, st.Player16
+                };
+                foreach (int ph in stSlots)
+                {
+                    if (ph != 0) fullMatchRosterHashes.Add(ph);
+                }
+            }
+
+            var pachangaOnlyGoalSlotHashes = new HashSet<int>();
+            foreach (var et in game.GetEncounterTeamsOnly())
+            {
+                if (et.Player1 != 0 &&
+                    !fullMatchRosterHashes.Contains(et.Player1) &&
+                    !protection.ProtectedStoryPlayerParamHashes.Contains(et.Player1))
+                {
+                    pachangaOnlyGoalSlotHashes.Add(et.Player1);
+                }
+            }
 
             var talentMoves = skills
                 .Where(s => s.SkillHash != 0 &&
@@ -298,7 +340,12 @@ namespace IEGORandomizer.Engine.Modules
                             // When replacing a story-scripted skill slot, prefer the same tactical category (Shoot/Dribble/Block/Save)
                             // so scripted shots remain shots, scripted saves remain saves, and scripted dribbles remain dribbles!
                             IReadOnlyList<ISkillConfig> candidatePool;
-                            if (isProtectedPlayer && protection.ScriptReferencedSkillHashes.Contains(originalHash))
+                            if (pachangaOnlyGoalSlotHashes.Contains(cp.ParamHash) && isInitialSlot)
+                            {
+                                // Never give 5v5 street-pachanga keepers a Level-1 GK Catch supertechnique (whkXXXX)!
+                                candidatePool = nonSaveFieldMoves;
+                            }
+                            else if (isProtectedPlayer && protection.ScriptReferencedSkillHashes.Contains(originalHash))
                             {
                                 candidatePool = SelectCategoryMatchedPool(
                                     originalHash,
@@ -324,6 +371,13 @@ namespace IEGORandomizer.Engine.Modules
                                     blockMoves,
                                     activeFieldMoves,
                                     learnRng);
+                            }
+
+                            if (isInitialSlot)
+                            {
+                                var soloInitialPool = candidatePool.Where(s => s.PartnerNumber <= 1).ToList();
+                                if (soloInitialPool.Count > 0)
+                                    candidatePool = soloInitialPool;
                             }
 
                             int? maxTpConstraint = (isInitialSlot && options.EnsureUsableInitialTp)
@@ -365,6 +419,26 @@ namespace IEGORandomizer.Engine.Modules
                                  .OrderBy(h => h)
                                  .ToList();
 
+                    int riccardoParamHash = Level5IdHelper.ComputeCrc32Utf8("para_cp0009");
+                    int[] earlyRaimonFieldHashes =
+                    {
+                        Level5IdHelper.ComputeCrc32Utf8("para_cp0002"), // Subaru
+                        Level5IdHelper.ComputeCrc32Utf8("para_cp0003"), // Gabriel
+                        Level5IdHelper.ComputeCrc32Utf8("para_cp0004"), // Wanli
+                        Level5IdHelper.ComputeCrc32Utf8("para_cp0006"), // Adé
+                        Level5IdHelper.ComputeCrc32Utf8("para_cp0007")  // Eugene
+                    };
+                    var forcedEarlyShooterHashes = new HashSet<int> { arionParamHash, riccardoParamHash };
+                    var presentEarlyFielders = earlyRaimonFieldHashes
+                        .Where(h => charaParams.Any(p => p.ParamHash == h && p.SpecialMoveCount > 0))
+                        .ToList();
+                    if (presentEarlyFielders.Count > 0)
+                    {
+                        starterRng.Shuffle(presentEarlyFielders);
+                        foreach (int h in presentEarlyFielders.Take(Math.Min(2, presentEarlyFielders.Count)))
+                            forcedEarlyShooterHashes.Add(h);
+                    }
+
                     foreach (var cp in charaParams)
                     {
                         if (cp.ParamHash == 0)
@@ -372,8 +446,30 @@ namespace IEGORandomizer.Engine.Modules
 
                         bool isArion = cp.ParamHash == arionParamHash;
                         bool isJp = cp.ParamHash == jpParamHash;
+                        bool mustHaveInitialSoloShot = forcedEarlyShooterHashes.Contains(cp.ParamHash) && soloStarterShotMoves.Count > 0;
+                        bool isPachangaOnlyKeeper = pachangaOnlyGoalSlotHashes.Contains(cp.ParamHash);
                         if (!options.GuaranteeInitialMoveOrSpiritForAllPlayers && !isArion)
                             continue;
+
+                        // Never force a Level-1 move or initial EG onto a pure 5v5 pachanga goal-slot scout!
+                        if (isPachangaOnlyKeeper)
+                        {
+                            if (cp.SpecialMoveCount > 0 &&
+                                cp.SpecialMoveOffset >= 0 &&
+                                cp.SpecialMoveOffset + cp.SpecialMoveCount <= skillTable.Length)
+                            {
+                                for (int s = 0; s < cp.SpecialMoveCount; s++)
+                                {
+                                    var stEntry = skillTable[cp.SpecialMoveOffset + s];
+                                    if (stEntry.LevelLearned <= 5 && whkSet.Contains(stEntry.SkillHash) && nonSaveFieldMoves.Count > 0)
+                                    {
+                                        stEntry.SkillHash = starterRng.PickOne(nonSaveFieldMoves).SkillHash;
+                                        skillTableModified = true;
+                                    }
+                                }
+                            }
+                            continue;
+                        }
 
                         if (cp.SpecialMoveCount <= 0 ||
                             cp.SpecialMoveOffset < 0 ||
@@ -458,22 +554,66 @@ namespace IEGORandomizer.Engine.Modules
                         }
 
                         bool hasInitialSpirit = cp.FightingSpiritHash != 0;
-                        bool mustForceInitialMove = isArion || isJp || (!hasLv1ActiveMove && !hasInitialSpirit);
+                        bool mustForceInitialMove = isArion || isJp || mustHaveInitialSoloShot || (!hasLv1ActiveMove && !hasInitialSpirit);
 
-                        if (mustForceInitialMove && !hasLv1ActiveMove)
+                        if (mustHaveInitialSoloShot)
+                        {
+                            // ANTI-SOFTLOCK GUARANTEE: Arion (para_cp0008), Riccardo (para_cp0009), and at least 2 early
+                            // Chapter 1/2 Raimon field starters MUST start at Level 1 with a solo TP-affordable Shoot move (whsXXXX)
+                            // so early 5v5 pachangas ("¡Marca 1 gol!") can ALWAYS be won cleanly without cheats!
+                            int shotSlot = isArion ? 0 : (firstActiveCandidateSlot >= 0 ? firstActiveCandidateSlot : 0);
+                            var shotEntry = skillTable[cp.SpecialMoveOffset + shotSlot];
+                            int usableLv1Tp = EstimateUsableInitialTp(game, cp);
+                            int starterTpCap = Math.Min(usableLv1Tp, 45);
+
+                            bool alreadyValidSoloShot = whsSet.Contains(shotEntry.SkillHash) &&
+                                                        shotEntry.LevelLearned == 1 &&
+                                                        skillByHash.TryGetValue(shotEntry.SkillHash, out var exShot) &&
+                                                        exShot.PartnerNumber <= 1 &&
+                                                        exShot.TPCost <= starterTpCap;
+
+                            if (!alreadyValidSoloShot)
+                            {
+                                assignedHashes.Remove(shotEntry.SkillHash);
+                                shotEntry.SkillHash = PickUniqueSkillHash(soloStarterShotMoves, assignedHashes, starterTpCap, starterRng);
+                                assignedHashes.Add(shotEntry.SkillHash);
+                                shotEntry.LevelLearned = 1;
+                                skillTableModified = true;
+                                report.GuaranteedInitialStarterCount++;
+                            }
+
+                            if (skillByHash.TryGetValue(shotEntry.SkillHash, out var finalShotCfg))
+                            {
+                                // Ensure Arion has enough Level-1 TP for at least 2 full shots (and teammates at least 1 + margin)
+                                int desiredLv1Tp = isArion
+                                    ? Math.Max(finalShotCfg.TPCost * 2, finalShotCfg.TPCost + 25)
+                                    : finalShotCfg.TPCost + 15;
+                                if (usableLv1Tp < desiredLv1Tp)
+                                {
+                                    cp.TP = Math.Max(cp.TP, desiredLv1Tp + 10);
+                                    charaParamsModified = true;
+                                }
+                            }
+                        }
+                        else if (mustForceInitialMove && !hasLv1ActiveMove)
                         {
                             int targetSlot = firstActiveCandidateSlot >= 0 ? firstActiveCandidateSlot : 0;
                             var targetEntry = skillTable[cp.SpecialMoveOffset + targetSlot];
                             int usableLv1Tp = EstimateUsableInitialTp(game, cp);
+                            int starterTpCap = Math.Min(usableLv1Tp, 50);
 
                             bool targetIsActive = targetEntry.SkillHash != 0 &&
                                                   !whpSet.Contains(targetEntry.SkillHash) &&
                                                   (whsSet.Contains(targetEntry.SkillHash) ||
                                                    whoSet.Contains(targetEntry.SkillHash) ||
                                                    whdSet.Contains(targetEntry.SkillHash) ||
-                                                   whkSet.Contains(targetEntry.SkillHash));
+                                                   whkSet.Contains(targetEntry.SkillHash)) &&
+                                                  (!skillByHash.TryGetValue(targetEntry.SkillHash, out var tCfg) || tCfg.PartnerNumber <= 1);
 
-                            if (!targetIsActive)
+                            if (!targetIsActive ||
+                                (options.EnsureUsableInitialTp &&
+                                 skillByHash.TryGetValue(targetEntry.SkillHash, out var curCfg) &&
+                                 curCfg.TPCost > starterTpCap))
                             {
                                 var rolePool = SelectCompatiblePool(
                                     cp.PlayerPosition,
@@ -485,25 +625,11 @@ namespace IEGORandomizer.Engine.Modules
                                     blockMoves,
                                     activeFieldMoves,
                                     starterRng);
+                                var soloRolePool = rolePool.Where(s => s.PartnerNumber <= 1).ToList();
+                                if (soloRolePool.Count > 0)
+                                    rolePool = soloRolePool;
                                 assignedHashes.Remove(targetEntry.SkillHash);
-                                targetEntry.SkillHash = PickUniqueSkillHash(rolePool, assignedHashes, usableLv1Tp, starterRng);
-                            }
-                            else if (options.EnsureUsableInitialTp &&
-                                     skillByHash.TryGetValue(targetEntry.SkillHash, out var curCfg) &&
-                                     curCfg.TPCost > usableLv1Tp)
-                            {
-                                var rolePool = SelectCompatiblePool(
-                                    cp.PlayerPosition,
-                                    0,
-                                    options.EnforcePositionCompatibility,
-                                    saveMoves,
-                                    shotMoves,
-                                    dribbleMoves,
-                                    blockMoves,
-                                    activeFieldMoves,
-                                    starterRng);
-                                assignedHashes.Remove(targetEntry.SkillHash);
-                                targetEntry.SkillHash = PickUniqueSkillHash(rolePool, assignedHashes, usableLv1Tp, starterRng);
+                                targetEntry.SkillHash = PickUniqueSkillHash(rolePool, assignedHashes, starterTpCap, starterRng);
                             }
 
                             if (options.EnsureUsableInitialTp &&
@@ -724,12 +850,28 @@ namespace IEGORandomizer.Engine.Modules
 
             if (slotIndex == 0)
             {
+                if (playerPosition == 1 && saveMoves.Count > 0)
+                    return saveMoves;
+
+                int roll = rng.NextIntInclusive(1, 100);
                 return playerPosition switch
                 {
-                    1 when saveMoves.Count > 0 => saveMoves,
-                    2 when shotMoves.Count > 0 => shotMoves,
-                    3 when dribbleMoves.Count > 0 => dribbleMoves,
-                    4 when blockMoves.Count > 0 => blockMoves,
+                    // Forwards: 80% Shoot, 20% Dribble
+                    2 => (roll <= 80 && shotMoves.Count > 0)
+                        ? shotMoves
+                        : (dribbleMoves.Count > 0 ? dribbleMoves : allActiveMoves),
+                    // Midfielders: 50% Dribble, 35% Shoot, 15% Block (so MFs across the game also learn Lv.1 Shots!)
+                    3 => (roll <= 50 && dribbleMoves.Count > 0)
+                        ? dribbleMoves
+                        : (roll <= 85 && shotMoves.Count > 0)
+                            ? shotMoves
+                            : (blockMoves.Count > 0 ? blockMoves : allActiveMoves),
+                    // Defenders: 60% Block, 20% Shoot, 20% Dribble
+                    4 => (roll <= 60 && blockMoves.Count > 0)
+                        ? blockMoves
+                        : (roll <= 80 && shotMoves.Count > 0)
+                            ? shotMoves
+                            : (dribbleMoves.Count > 0 ? dribbleMoves : allActiveMoves),
                     _ => allActiveMoves
                 };
             }

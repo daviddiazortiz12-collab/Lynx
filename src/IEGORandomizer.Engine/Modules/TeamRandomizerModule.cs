@@ -271,14 +271,24 @@ namespace IEGORandomizer.Engine.Modules
 
                 if (options.RandomizeEquipment)
                 {
-                    if (bootsPool.Count > 0 && (!isPachanga || tp.BootsID != 0))
-                        tp.BootsID = equipRng.PickOne(bootsPool);
-                    if (glovesPool.Count > 0 && (!isPachanga || tp.GlovesID != 0))
-                        tp.GlovesID = equipRng.PickOne(glovesPool);
-                    if (braceletPool.Count > 0 && (!isPachanga || tp.BraceletID != 0))
-                        tp.BraceletID = equipRng.PickOne(braceletPool);
-                    if (pendantPool.Count > 0 && (!isPachanga || tp.PendantID != 0))
-                        tp.PendantID = equipRng.PickOne(pendantPool);
+                    // Tier equipment for early-game teams (Lv <= 15) so Lv.2 teams never roll +70 endgame Zero/Omega gear,
+                    // and NEVER put GK Gloves on 5v5 Pachangas (so street pachanga keepers don't get massive Catch bonuses)!
+                    bool isEarlyTier = tp.Level > 0 && tp.Level <= 15;
+                    var effBootsPool = isEarlyTier && bootsPool.Count >= 4 ? bootsPool.Take(Math.Max(2, bootsPool.Count / 3)).ToList() : bootsPool;
+                    var effGlovesPool = isEarlyTier && glovesPool.Count >= 4 ? glovesPool.Take(Math.Max(2, glovesPool.Count / 3)).ToList() : glovesPool;
+                    var effBraceletPool = isEarlyTier && braceletPool.Count >= 4 ? braceletPool.Take(Math.Max(2, braceletPool.Count / 3)).ToList() : braceletPool;
+                    var effPendantPool = isEarlyTier && pendantPool.Count >= 4 ? pendantPool.Take(Math.Max(2, pendantPool.Count / 3)).ToList() : pendantPool;
+
+                    if (effBootsPool.Count > 0 && (!isPachanga || tp.BootsID != 0))
+                        tp.BootsID = equipRng.PickOne(effBootsPool);
+                    if (isPachanga)
+                        tp.GlovesID = 0;
+                    else if (effGlovesPool.Count > 0)
+                        tp.GlovesID = equipRng.PickOne(effGlovesPool);
+                    if (effBraceletPool.Count > 0 && (!isPachanga || tp.BraceletID != 0))
+                        tp.BraceletID = equipRng.PickOne(effBraceletPool);
+                    if (effPendantPool.Count > 0 && (!isPachanga || tp.PendantID != 0))
+                        tp.PendantID = equipRng.PickOne(effPendantPool);
 
                     if (isPachanga && tp.BootsID != 0)
                     {

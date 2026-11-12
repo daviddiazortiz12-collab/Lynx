@@ -186,7 +186,7 @@ namespace IEGORandomizer.App
             try
             {
                 Console.WriteLine("================================================================");
-                Console.WriteLine("  IEGO RANDOMIZER v1.2.0 — Inazuma Eleven GO: Luz y Sombra (CLI)");
+                Console.WriteLine("  IEGO RANDOMIZER v1.2.1 — Inazuma Eleven GO: Luz y Sombra (CLI)");
                 Console.WriteLine("================================================================");
 
                 var coordinator = new RandomizerCoordinator();
@@ -287,7 +287,7 @@ namespace IEGORandomizer.App
 
         public static void PrintHelp()
         {
-            Console.WriteLine("Uso (IEGO Randomizer v1.2.0 — Edición Nintendo 2DS/3DS & PC):");
+            Console.WriteLine("Uso (IEGO Randomizer v1.2.1 — Edición Nintendo 2DS/3DS & PC):");
             Console.WriteLine("  IEGORandomizer                                                         Inicia la interfaz gráfica de escritorio (PC)");
             Console.WriteLine("  IEGORandomizer -i <original.cia> --output-cia <nuevo.cia> [opciones]   Modo Principal: .cia/.piratelegit.cia -> randomizar -> actualización FBI .cia");
             Console.WriteLine("  IEGORandomizer --merge-cia <original.cia> --romfs <dir> --output-cia <nuevo.cia>  Segundo Modo: .cia + carpeta RomFS -> nuevo .cia");
@@ -298,7 +298,7 @@ namespace IEGORandomizer.App
             Console.WriteLine("Opciones CLI:");
             Console.WriteLine("  -i, --input <ruta>           Ruta al archivo .cia / .piratelegit.cia, .3ds desencriptado, carpeta RomFS o ie_a.fa");
             Console.WriteLine("  --output-cia <nuevo.cia>     Ruta del nuevo archivo .cia verificado de salida (listo para FBI en 2DS/3DS)");
-            Console.WriteLine("  --fbi-update                 (Por defecto) Incrementa TitleVersion TMD (V.1.2.0) para actualizar encima en FBI conservando partida");
+            Console.WriteLine("  --fbi-update                 (Por defecto) Incrementa TitleVersion TMD (V.1.2.1) para actualizar encima en FBI conservando partida");
             Console.WriteLine("  --cia-version <X.Y.Z>        Fija una versión TMD explícita para FBI (ej. 1.2.0 o 1056)");
             Console.WriteLine("  --keep-cia-version           Conserva exactamente el TitleVersion original (ej. V.0.0.0)");
             Console.WriteLine("  --companion-luma             Exporta también Luma3DS/titles/<TitleID>/romfs/ie_a.fa junto al .cia");
@@ -334,7 +334,7 @@ namespace IEGORandomizer.App
                 }
 
                 Console.WriteLine("================================================================");
-                Console.WriteLine("  IEGO RANDOMIZER v1.2.0 — INSPECCIÓN LOCAL .CIA (SOLO LECTURA)");
+                Console.WriteLine("  IEGO RANDOMIZER v1.2.1 — INSPECCIÓN LOCAL .CIA (SOLO LECTURA)");
                 Console.WriteLine("================================================================");
                 Console.WriteLine($"  Archivo analizado : {rep.FilePath} ({rep.FileSizeBytes:N0} B)");
                 Console.WriteLine($"  SHA-256 original  : {rep.Sha256Hex}");
@@ -372,7 +372,7 @@ namespace IEGORandomizer.App
             try
             {
                 Console.WriteLine("================================================================");
-                Console.WriteLine("  IEGO RANDOMIZER v1.2.0 — MODO PRINCIPAL (.CIA -> ACTUALIZACIÓN FBI .CIA)");
+                Console.WriteLine("  IEGO RANDOMIZER v1.2.1 — MODO PRINCIPAL (.CIA -> ACTUALIZACIÓN FBI .CIA)");
                 Console.WriteLine("================================================================");
 
                 var svc = new CiaWorkflowService();
@@ -426,7 +426,7 @@ namespace IEGORandomizer.App
             try
             {
                 Console.WriteLine("================================================================");
-                Console.WriteLine("  IEGO RANDOMIZER v1.2.0 — MODO 2 (.CIA + ROMFS -> NUEVO .CIA)");
+                Console.WriteLine("  IEGO RANDOMIZER v1.2.1 — MODO 2 (.CIA + ROMFS -> NUEVO .CIA)");
                 Console.WriteLine("================================================================");
 
                 var svc = new CiaWorkflowService();

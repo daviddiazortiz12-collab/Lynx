@@ -4,8 +4,8 @@ setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
 echo ============================================================================
-echo   IEGO RANDOMIZER v1.2.0 — GENERADOR 1-CLIC DE ACTUALIZACION FBI (2DS/3DS)
-echo   Semilla preconfigurada: TITAN-C45C-614C (Version TMD: V.1.2.0 ^> V.1.1.2)
+echo   IEGO RANDOMIZER v1.2.1 — GENERADOR 1-CLIC DE ACTUALIZACION FBI (2DS/3DS)
+echo   Semilla preconfigurada: TITAN-C45C-614C (Version TMD: V.1.2.1 ^> V.1.1.2)
 echo ============================================================================
 echo.
 
@@ -25,12 +25,12 @@ if "%SRC_CIA%"=="" (
 )
 
 for %%F in ("%SRC_CIA%") do (
-    set "OUT_DIR=%%~dpFActualizacion_FBI_v1.2.0"
+    set "OUT_DIR=%%~dpFActualizacion_FBI_v1.2.1"
     set "BASE_NAME=%%~nF"
 )
 
 if not exist "%OUT_DIR%" mkdir "%OUT_DIR%"
-set "OUT_CIA=%OUT_DIR%\%BASE_NAME%_Actualizacion_FBI_v1.2.0_TITAN-C45C-614C.cia"
+set "OUT_CIA=%OUT_DIR%\%BASE_NAME%_Actualizacion_FBI_v1.2.1_TITAN-C45C-614C.cia"
 
 echo   Entrada (solo lectura) : "%SRC_CIA%"
 echo   Salida Actualizacion   : "%OUT_CIA%"
@@ -50,7 +50,7 @@ echo   LISTO PARA TU NINTENDO 2DS:
 echo   1. Copia este archivo a la carpeta /cias/ de la tarjeta SD de tu 2DS:
 echo      "%OUT_CIA%"
 echo   2. En tu 2DS abre FBI -^> SD -^> cias -^> pulsa A sobre el .cia -^> "Install CIA".
-echo      FBI detectara automaticamente V.1.2.0 y actualizara el juego encima
+echo      FBI detectara automaticamente V.1.2.1 y actualizara el juego encima
 echo      conservando tu TitleID (0004000000112F00) y tu SaveDataSize (512 KB).
 echo ============================================================================
 explorer "%OUT_DIR%"

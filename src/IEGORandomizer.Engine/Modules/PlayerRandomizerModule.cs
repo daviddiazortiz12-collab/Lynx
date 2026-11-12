@@ -155,7 +155,8 @@ namespace IEGORandomizer.Engine.Modules
                                     usedBasesOnTeam,
                                     paramByHash,
                                     swappableParams,
-                                    dedupRng);
+                                    dedupRng,
+                                    forbidGk: i == 0);
                                 TeamSlotAccessor.SetEncountPlayer(team, i + 1, resolvedHash);
                                 report.RandomizedPachangaPlayerSlotsCount++;
                             }
@@ -248,6 +249,7 @@ namespace IEGORandomizer.Engine.Modules
                                             var sameRigPool = swappableParams
                                                 .Where(p => p.ParamHash != origId &&
                                                             !usedBasesInSpawn.Contains(p.BaseHash) &&
+                                                            (slotIdx != 0 || p.PlayerPosition != 1) &&
                                                             baseByHash.TryGetValue(p.BaseHash, out var cb) &&
                                                             cb.Body == origCb.Body &&
                                                             cb.Gender == origCb.Gender)
@@ -265,7 +267,8 @@ namespace IEGORandomizer.Engine.Modules
                                             usedBasesInSpawn,
                                             paramByHash,
                                             swappableParams,
-                                            dedupRng);
+                                            dedupRng,
+                                            forbidGk: slotIdx == 0);
                                         if (candidateParam != origId)
                                         {
                                             SetSpawnPlayerSlot(spawn.Record, slotIdx, candidateParam);
@@ -365,17 +368,50 @@ namespace IEGORandomizer.Engine.Modules
                 game.SaveCharaBase(charaBases);
             }
 
-            // Identify which players currently sit in Goalkeeper slot #1 on any active team so we don't leave a team GK-less
+            // Identify which players currently sit in Goalkeeper slot #1 on genuine 11v11 full-pitch teams.
+            // CRITICAL ANTI-SOFTLOCK: NEVER include 5v5 Pachanga teams (encountTeams / mapSpawns) or <6-player duels here!
+            // Treating 5v5 Pachanga Slot-1 players as dedicated Goalkeepers forced them to PlayerPosition=1 + high Catch
+            // + Level-1 GK Save moves, creating unbeatable pachanga keepers early in Chapter 1/2!
             var activeSlot1Goalkeepers = new HashSet<int>();
-            if (options.PreserveGoalkeeperRolesInRosters)
+            var fullMatchPlayerSet = new HashSet<int>();
+            foreach (var st in storyTeams)
             {
-                foreach (var st in storyTeams)
+                bool isFull11v11 = st.Player6 != 0 && st.Player11 != 0;
+                if (!isFull11v11)
+                    continue;
+
+                if (options.PreserveGoalkeeperRolesInRosters && st.Player1 != 0)
+                    activeSlot1Goalkeepers.Add(st.Player1);
+
+                for (int s = 1; s <= 16; s++)
                 {
-                    if (st.Player1 != 0) activeSlot1Goalkeepers.Add(st.Player1);
+                    int ph = TeamSlotAccessor.GetStoryPlayer(st, s);
+                    if (ph != 0) fullMatchPlayerSet.Add(ph);
                 }
-                foreach (var et in encountTeams)
+            }
+
+            // Track players who stand in Goal Slot #1 of 5v5 Pachangas (and are not full-match GKs or protected story chars)
+            var pachangaOnlyGoalSlotPlayers = new HashSet<int>();
+            foreach (var et in encountTeams)
+            {
+                if (et.Player1 != 0 &&
+                    !activeSlot1Goalkeepers.Contains(et.Player1) &&
+                    !fullMatchPlayerSet.Contains(et.Player1) &&
+                    !protection.ProtectedStoryPlayerParamHashes.Contains(et.Player1))
                 {
-                    if (et.Player1 != 0) activeSlot1Goalkeepers.Add(et.Player1);
+                    pachangaOnlyGoalSlotPlayers.Add(et.Player1);
+                }
+            }
+            foreach (var sp in mapSpawns)
+            {
+                int spGoal = GetSpawnPlayerSlot(sp.Record, 0);
+                if (spGoal != 0 &&
+                    paramByHash.ContainsKey(spGoal) &&
+                    !activeSlot1Goalkeepers.Contains(spGoal) &&
+                    !fullMatchPlayerSet.Contains(spGoal) &&
+                    !protection.ProtectedStoryPlayerParamHashes.Contains(spGoal))
+                {
+                    pachangaOnlyGoalSlotPlayers.Add(spGoal);
                 }
             }
 
@@ -394,12 +430,34 @@ namespace IEGORandomizer.Engine.Modules
                         cp.PlayerPosition = 1;
                         continue;
                     }
+                    if (pachangaOnlyGoalSlotPlayers.Contains(cp.ParamHash))
+                    {
+                        // Never turn a 5v5 pachanga keeper into a dedicated Goalkeeper (Position=1)
+                        int fieldPos = posRng.NextIntInclusive(2, 4);
+                        if (fieldPos != cp.PlayerPosition)
+                        {
+                            cp.PlayerPosition = fieldPos;
+                            report.RandomizedPlayerPositionsCount++;
+                        }
+                        continue;
+                    }
 
                     int newPos = posRng.NextIntInclusive(1, 4);
                     if (newPos != cp.PlayerPosition)
                     {
                         cp.PlayerPosition = newPos;
                         report.RandomizedPlayerPositionsCount++;
+                    }
+                }
+            }
+            else
+            {
+                // Even when position randomization is off, ensure pure pachanga goal-slot players aren't dedicated GKs
+                foreach (int pHash in pachangaOnlyGoalSlotPlayers)
+                {
+                    if (paramByHash.TryGetValue(pHash, out var pObj) && pObj.PlayerPosition == 1)
+                    {
+                        pObj.PlayerPosition = 3;
                     }
                 }
             }
@@ -419,33 +477,48 @@ namespace IEGORandomizer.Engine.Modules
             }
 
             // 5. Base Stats & Growth Curves
+            // NOTE: In IEGO's GOStatCalculator (0x0033E404), ICharaparam.Kick/Catch/etc. are LEVEL-1 BASE STATS
+            // (retail range ~10..52, where growth adds +55..+95 by Lv.99), NOT Level-99 totals!
+            // Never set a 65..95 floor on Level-1 Catch (which turned Lv.1 keepers into Lv.85 endgame walls)!
             if (options.RandomizeBaseStats)
             {
                 DeterministicRng statRng = seeds.GetSubsystem("players.stats");
                 int variance = Math.Clamp(options.StatVariancePercent, 5, 60);
+                int arionHash = Level5IdHelper.ComputeCrc32Utf8("para_cp0008");
 
                 foreach (var cp in charaParams)
                 {
                     if (!visualProfile.CoherentPlayableParamHashes.Contains(cp.ParamHash))
                         continue;
 
-                    cp.FP = ScaleStat(cp.FP, variance, 95, 220, statRng);
-                    cp.TP = ScaleStat(cp.TP, variance, 95, 210, statRng); // TP >= 95 ensures starter moves remain usable
-                    cp.Kick = ScaleStat(cp.Kick, variance, 25, 180, statRng);
-                    cp.Dribble = ScaleStat(cp.Dribble, variance, 25, 180, statRng);
-                    cp.Technique = ScaleStat(cp.Technique, variance, 25, 180, statRng);
-                    cp.Block = ScaleStat(cp.Block, variance, 25, 180, statRng);
-                    cp.Speed = ScaleStat(cp.Speed, variance, 25, 180, statRng);
-                    cp.Stamina = ScaleStat(cp.Stamina, variance, 25, 180, statRng);
-                    cp.Catch = ScaleStat(cp.Catch, variance, 25, 180, statRng);
-                    cp.Luck = ScaleStat(cp.Luck, variance, 20, 160, statRng);
+                    cp.FP = ScaleStat(cp.FP, variance, 75, 220, statRng);
+                    cp.TP = ScaleStat(cp.TP, variance, 90, 210, statRng); // TP >= 90 ensures multiple starter moves are usable at Lv.1
+                    cp.Kick = ScaleStat(cp.Kick, variance, 12, 180, statRng);
+                    cp.Dribble = ScaleStat(cp.Dribble, variance, 12, 180, statRng);
+                    cp.Technique = ScaleStat(cp.Technique, variance, 12, 180, statRng);
+                    cp.Block = ScaleStat(cp.Block, variance, 12, 180, statRng);
+                    cp.Speed = ScaleStat(cp.Speed, variance, 12, 180, statRng);
+                    cp.Stamina = ScaleStat(cp.Stamina, variance, 12, 180, statRng);
+                    cp.Catch = ScaleStat(cp.Catch, variance, 10, 180, statRng);
+                    cp.Luck = ScaleStat(cp.Luck, variance, 10, 160, statRng);
                     cp.Freedom = ScaleStat(Math.Max(20, cp.Freedom), variance, 15, 120, statRng);
 
-                    // Role-coherent floor so randomized GKs can actually stop shots and FWs can score
-                    if (cp.PlayerPosition == 1 && cp.Catch < 65)
-                        cp.Catch = statRng.NextIntInclusive(65, 95);
-                    else if (cp.PlayerPosition == 2 && cp.Kick < 65)
-                        cp.Kick = statRng.NextIntInclusive(65, 95);
+                    // Calibrated Level-1 Base Stat role floors (24..34 at Lv.1 -> ~105..135 at Lv.99)
+                    if (cp.PlayerPosition == 1 && cp.Catch < 24)
+                        cp.Catch = statRng.NextIntInclusive(24, 34);
+                    else if (cp.PlayerPosition == 2 && cp.Kick < 24)
+                        cp.Kick = statRng.NextIntInclusive(24, 34);
+
+                    // Cap pure 5v5 pachanga keepers' Level-1 Base Catch so street pachangas never become unbeatable walls
+                    if (pachangaOnlyGoalSlotPlayers.Contains(cp.ParamHash) && cp.Catch > 24)
+                        cp.Catch = 24;
+
+                    // Ensure protagonist Arion always has solid Level-1 Base Kick & TP from Minute 0
+                    if (cp.ParamHash == arionHash)
+                    {
+                        if (cp.Kick < 28) cp.Kick = 28;
+                        if (cp.TP < 100) cp.TP = 100;
+                    }
 
                     report.RandomizedPlayerStatsCount++;
                 }
@@ -468,6 +541,14 @@ namespace IEGORandomizer.Engine.Modules
                     // - Preserve exact vanilla spirit on protected story bearers (Victor ck0002, Riccardo ck0003, bosses)!
                     if (protection.ProtectedAvatarBearerParamHashes.Contains(cp.ParamHash))
                     {
+                        continue;
+                    }
+
+                    // Pure 5v5 pachanga goal-slot players should not summon EGs in timed 15-minute street pachangas
+                    if (pachangaOnlyGoalSlotPlayers.Contains(cp.ParamHash))
+                    {
+                        cp.FightingSpiritHash = 0;
+                        cp.FightingSpiritMatchkHash = 0;
                         continue;
                     }
 
@@ -648,11 +729,13 @@ namespace IEGORandomizer.Engine.Modules
             HashSet<int> usedBasesOnTeam,
             Dictionary<int, ICharaparam> paramByHash,
             List<ICharaparam> swappableParams,
-            DeterministicRng rng)
+            DeterministicRng rng,
+            bool forbidGk = false)
         {
             if (paramByHash.TryGetValue(proposedParamHash, out var proposedObj) &&
                 proposedObj.BaseHash != 0 &&
-                !usedBasesOnTeam.Contains(proposedObj.BaseHash))
+                !usedBasesOnTeam.Contains(proposedObj.BaseHash) &&
+                (!forbidGk || proposedObj.PlayerPosition != 1))
             {
                 usedBasesOnTeam.Add(proposedObj.BaseHash);
                 return proposedParamHash;
@@ -662,10 +745,11 @@ namespace IEGORandomizer.Engine.Modules
                 .Where(p => p.ParamHash != oldParamHash &&
                             p.BaseHash != 0 &&
                             !usedBasesOnTeam.Contains(p.BaseHash) &&
-                            (!requireGk || p.PlayerPosition == 1))
+                            (!requireGk || p.PlayerPosition == 1) &&
+                            (!forbidGk || p.PlayerPosition != 1))
                 .ToList();
 
-            if (candidates.Count == 0 && requireGk)
+            if (candidates.Count == 0 && (requireGk || forbidGk))
             {
                 candidates = swappableParams
                     .Where(p => p.ParamHash != oldParamHash && p.BaseHash != 0 && !usedBasesOnTeam.Contains(p.BaseHash))

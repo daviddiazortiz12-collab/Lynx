@@ -741,5 +741,179 @@ namespace IEGORandomizer.Tests
             };
             return NutbBytecodeCodec.Serialize(script);
         }
+
+        [Fact]
+        public void PachangaKeeperAndEarlyRaimonShootSoftlock_NeverCreatesUnbeatableKeeperOrShootlessEarlyParty()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "iego_v121_pachanga_balance_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                string sourceFa = Path.Combine(tempDir, "ie_a.fa");
+                SyntheticGameArchiveBuilder.CreateRealisticIeAFa(sourceFa);
+
+                // Simulate realistic retail Level-1 Base Stats (Catch=14..28, Kick=18..30) + Arion (para_cp0008, MF)
+                // + early Raimon field starters (para_cp0002, para_cp0006, para_cp0007, para_cp0009)
+                int arionHash = Level5IdHelper.ComputeCrc32Utf8("para_cp0008");
+                int riccardoHash = Level5IdHelper.ComputeCrc32Utf8("para_cp0009");
+                int subaruHash = Level5IdHelper.ComputeCrc32Utf8("para_cp0002");
+                int adeHash = Level5IdHelper.ComputeCrc32Utf8("para_cp0006");
+                int eugeneHash = Level5IdHelper.ComputeCrc32Utf8("para_cp0007");
+                var whsLookup = Level5IdHelper.BuildPrefixLookup("whs");
+                var whkLookup = Level5IdHelper.BuildPrefixLookup("whk");
+
+                using (var game = new SafeGOGame(sourceFa))
+                {
+                    var bases = game.GetCharabase().ToList();
+                    var cpList = game.GetCharaparams().ToList();
+                    var stList = game.GetSkillTable().ToList();
+
+                    // Convert baseline synthetic Catch/Kick to retail Level-1 Base Stat scale (~14..32)
+                    foreach (var p in cpList)
+                    {
+                        p.Catch = p.PlayerPosition == 1 ? 26 : 15;
+                        p.Kick = p.PlayerPosition == 2 ? 28 : 20;
+                    }
+
+                    (string Code, int Num, int Pos, int LvLearned)[] earlyDefs =
+                    {
+                        ("cp0008", 8, 3, 101), // Arion (MF, all 3 vanilla slots 101)
+                        ("cp0009", 9, 3, 1),   // Riccardo (MF)
+                        ("cp0002", 2, 4, 5),   // Subaru (DF)
+                        ("cp0006", 6, 3, 5),   // Adé (MF)
+                        ("cp0007", 7, 3, 5)    // Eugene (MF)
+                    };
+
+                    foreach (var ed in earlyDefs)
+                    {
+                        int bHash = Level5IdHelper.ComputeCrc32Utf8(ed.Code);
+                        int pHash = Level5IdHelper.ComputeCrc32Utf8("para_" + ed.Code);
+                        if (!bases.Any(b => b.BaseHash == bHash))
+                        {
+                            AddCpCharacterAssets(game.IE_A.Directory, bases, modelNum: ed.Num, body: 1, gender: 1, nameSeed: 9000 + ed.Num);
+                        }
+
+                        if (!cpList.Any(p => p.ParamHash == pHash))
+                        {
+                            int off = stList.Count;
+                            int count = ed.Code == "cp0008" ? 4 : 2;
+                            for (int s = 0; s < count; s++)
+                            {
+                                stList.Add(new GOSupport.SkillTable
+                                {
+                                    SkillIndex = s,
+                                    SkillHash = Level5IdHelper.ComputeCrc32Utf8("who0001"), // Dribble in vanilla
+                                    LevelLearned = ed.Code == "cp0008" && s < 3 ? 101 : (s == 0 ? ed.LvLearned : 20)
+                                });
+                            }
+                            cpList.Add(new GOSupport.CharaParam
+                            {
+                                ParamHash = pHash,
+                                BaseHash = bHash,
+                                PlayerPosition = ed.Pos,
+                                Element = 1,
+                                FP = 80,
+                                TP = 85,
+                                Kick = 22,
+                                Dribble = 24,
+                                Technique = 22,
+                                Block = 20,
+                                Speed = 22,
+                                Stamina = 20,
+                                Catch = 16,
+                                Luck = 18,
+                                Freedom = 40,
+                                SpecialMoveOffset = off,
+                                SpecialMoveCount = count
+                            });
+                        }
+                    }
+
+                    game.SaveCharaBase(bases.ToArray());
+                    game.SaveCharaparams(cpList.ToArray());
+                    game.SaveSkillTable(stList.ToArray());
+                    string updated = Path.Combine(tempDir, "ie_a_v121.fa");
+                    game.SaveCopyTo(updated);
+                    sourceFa = updated;
+                }
+
+                string[] seedsToTest = { "TITAN-C45C-614C", "SOFTLOCK-SEED-1", "SOFTLOCK-SEED-2", "SOFTLOCK-SEED-3" };
+                var coordinator = new RandomizerCoordinator();
+
+                foreach (string seed in seedsToTest)
+                {
+                    string outDir = Path.Combine(tempDir, "out_" + seed);
+                    coordinator.GenerateRun(sourceFa, outDir, new RandomizerOptions { Seed = seed });
+
+                    using var modded = new SafeGOGame(Path.Combine(outDir, "Standalone", "ie_a.fa"));
+                    var paramByHash = modded.GetCharaparams().ToDictionary(p => p.ParamHash);
+                    var skillByHash = modded.GetSkillConfigs(false).ToDictionary(s => s.SkillHash);
+                    var st = modded.GetSkillTable();
+
+                    // 1. Arion (para_cp0008) MUST ALWAYS have a Level-1 solo Shoot technique (whsXXXX) & enough Lv.1 TP for >=2 shots!
+                    var arion = paramByHash[arionHash];
+                    var arionSlot0 = st[arion.SpecialMoveOffset];
+                    Assert.Equal(1, arionSlot0.LevelLearned);
+                    Assert.True(whsLookup.ContainsKey(arionSlot0.SkillHash),
+                        $"Seed {seed}: Arion Slot 0 MUST be a Shoot technique (whsXXXX), got {arionSlot0.SkillHash:X8}!");
+                    var arionShotCfg = skillByHash[arionSlot0.SkillHash];
+                    Assert.True(arionShotCfg.PartnerNumber <= 1, "Arion Lv.1 starter shot must be a solo shot (PartnerNumber <= 1)!");
+
+                    // 2. At least 3 early Raimon members (Arion + Riccardo + >=2 of Subaru/Adé/Eugene) MUST have Level-1 Shoot moves!
+                    int[] earlySquad = { arionHash, riccardoHash, subaruHash, adeHash, eugeneHash };
+                    int earlyShootersCount = earlySquad.Count(ph =>
+                    {
+                        var p = paramByHash[ph];
+                        for (int s = 0; s < p.SpecialMoveCount; s++)
+                        {
+                            var sl = st[p.SpecialMoveOffset + s];
+                            if (sl.LevelLearned == 1 && whsLookup.ContainsKey(sl.SkillHash))
+                                return true;
+                        }
+                        return false;
+                    });
+                    Assert.True(earlyShootersCount >= 4,
+                        $"Seed {seed}: Expected at least 4 early Raimon shooters with Lv.1 Shoot techniques, got {earlyShootersCount}!");
+
+                    // 3. Every 5v5 Pachanga keeper (encountTeams Player1) MUST NOT be turned into a dedicated GK wall!
+                    var fullMatchIds = new HashSet<int>(
+                        modded.GetStoryTeamsOnly()
+                              .Where(t => t.Player6 != 0 && t.Player11 != 0)
+                              .SelectMany(t => new[] { t.Player1, t.Player2, t.Player3, t.Player4, t.Player5, t.Player6, t.Player7, t.Player8, t.Player9, t.Player10, t.Player11 }));
+
+                    foreach (var et in modded.GetEncounterTeamsOnly())
+                    {
+                        if (et.Player1 == 0 || fullMatchIds.Contains(et.Player1))
+                            continue;
+
+                        var pk = paramByHash[et.Player1];
+                        Assert.NotEqual(1, pk.PlayerPosition, $"Seed {seed}: 5v5 Pachanga keeper must NOT be forced to GK (Position=1)!");
+                        Assert.True(pk.Catch <= 24, $"Seed {seed}: 5v5 Pachanga keeper Lv.1 Base Catch ({pk.Catch}) must not be inflated!");
+                        Assert.Equal(0, pk.FightingSpiritHash);
+
+                        for (int s = 0; s < pk.SpecialMoveCount; s++)
+                        {
+                            var sl = st[pk.SpecialMoveOffset + s];
+                            if (sl.LevelLearned <= 5)
+                            {
+                                Assert.False(whkLookup.ContainsKey(sl.SkillHash),
+                                    $"Seed {seed}: 5v5 Pachanga keeper must NOT have an early GK Save supertechnique (whkXXXX)!");
+                            }
+                        }
+                    }
+
+                    // 4. Pachanga TeamParam must NEVER wear GK Gloves (GlovesID == 0)
+                    var encIds = new HashSet<int>(modded.GetEncounterTeamsOnly().Select(e => e.TeamConfigID));
+                    foreach (var tp in modded.GetTeamParams().Where(t => encIds.Contains(t.TeamConfigID)))
+                    {
+                        Assert.Equal(0, tp.GlovesID);
+                    }
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tempDir, recursive: true); } catch { }
+            }
+        }
     }
 }
