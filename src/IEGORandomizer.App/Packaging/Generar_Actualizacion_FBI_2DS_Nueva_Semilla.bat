@@ -4,8 +4,8 @@ setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
 echo ============================================================================
-echo   IEGO RANDOMIZER v1.2.1 — GENERADOR 1-CLIC DE ACTUALIZACION FBI (2DS/3DS)
-echo   Modo: Nueva Semilla Aleatoria (Version TMD: V.1.2.1 ^> V.1.1.2)
+echo   IEGO RANDOMIZER v1.2.2 — GENERADOR 1-CLIC DE ACTUALIZACION FBI (2DS/3DS)
+echo   Modo: Nueva Semilla Aleatoria (Version TMD: V.1.2.2 ^> V.1.1.2)
 echo ============================================================================
 echo.
 
@@ -25,12 +25,12 @@ if "%SRC_CIA%"=="" (
 )
 
 for %%F in ("%SRC_CIA%") do (
-    set "OUT_DIR=%%~dpFActualizacion_FBI_v1.2.1"
+    set "OUT_DIR=%%~dpFActualizacion_FBI_v1.2.2"
     set "BASE_NAME=%%~nF"
 )
 
 if not exist "%OUT_DIR%" mkdir "%OUT_DIR%"
-set "OUT_CIA=%OUT_DIR%\%BASE_NAME%_Actualizacion_FBI_v1.2.1_Random.cia"
+set "OUT_CIA=%OUT_DIR%\%BASE_NAME%_Actualizacion_FBI_v1.2.2_Random.cia"
 
 "%~dp0IEGORandomizer.exe" -i "%SRC_CIA%" --output-cia "%OUT_CIA%" --fbi-update --companion-luma
 if errorlevel 1 (

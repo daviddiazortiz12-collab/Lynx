@@ -529,6 +529,16 @@ namespace IEGORandomizer.Engine.Modules
             {
                 DeterministicRng avatarRng = seeds.GetSubsystem("players.avatars");
                 var avatarPool = visualProfile.ValidAvatarHashes.OrderBy(x => x).ToList();
+                var wkkSaveSpiritMoves = new HashSet<int>(
+                    Enumerable.Range(1, 8999).Select(n => Level5IdHelper.ComputeCrc32Utf8($"wkk{n:D4}")));
+                var avatarConfigs = game.GetAvatars(false) ?? Array.Empty<IAvatar>();
+                var saveAvatarHashes = new HashSet<int>(
+                    avatarConfigs.Where(a => a.AvatarHash != 0 && wkkSaveSpiritMoves.Contains(a.SpecialMoveID))
+                                 .Select(a => a.AvatarHash));
+                var nonSaveAvatarPool = avatarPool.Where(h => !saveAvatarHashes.Contains(h)).ToList();
+                if (nonSaveAvatarPool.Count == 0)
+                    nonSaveAvatarPool = avatarPool;
+
                 int chance = Math.Clamp(options.FightingSpiritChancePercent, 0, 100);
 
                 foreach (var cp in charaParams)
@@ -544,17 +554,12 @@ namespace IEGORandomizer.Engine.Modules
                         continue;
                     }
 
-                    // Pure 5v5 pachanga goal-slot players should not summon EGs in timed 15-minute street pachangas
-                    if (pachangaOnlyGoalSlotPlayers.Contains(cp.ParamHash))
-                    {
-                        cp.FightingSpiritHash = 0;
-                        cp.FightingSpiritMatchkHash = 0;
-                        continue;
-                    }
-
                     if (avatarRng.NextChancePercent(chance))
                     {
-                        int assigned = avatarRng.PickOne(avatarPool);
+                        var poolForPlayer = pachangaOnlyGoalSlotPlayers.Contains(cp.ParamHash)
+                            ? nonSaveAvatarPool
+                            : avatarPool;
+                        int assigned = avatarRng.PickOne(poolForPlayer);
                         cp.FightingSpiritHash = assigned;
                         cp.FightingSpiritMatchkHash = assigned;
                         report.RandomizedPlayerAvatarsCount++;

@@ -875,7 +875,27 @@ namespace IEGORandomizer.Tests
                     Assert.True(earlyShootersCount >= 4,
                         $"Seed {seed}: Expected at least 4 early Raimon shooters with Lv.1 Shoot techniques, got {earlyShootersCount}!");
 
-                    // 3. Every 5v5 Pachanga keeper (encountTeams Player1) MUST NOT be turned into a dedicated GK wall!
+                    // 3. ALL playable characters (100% — including EVERY 5v5 Pachanga player!) MUST have >=1 Lv.1 active move OR >=1 EG,
+                    //    while 5v5 Pachanga keepers are still never turned into dedicated GK Catch walls!
+                    var activeSkillLookup = Level5IdHelper.BuildPrefixLookup("whs", "who", "whd", "whk");
+                    var visProfile = IEGORandomizer.Engine.Validation.VisualCoherenceValidator.AnalyzeArchive(modded);
+                    foreach (var p in modded.GetCharaparams().Where(c => visProfile.CoherentPlayableParamHashes.Contains(c.ParamHash)))
+                    {
+                        bool hasLv1Move = false;
+                        for (int s = 0; s < p.SpecialMoveCount; s++)
+                        {
+                            var sl = st[p.SpecialMoveOffset + s];
+                            if (sl.LevelLearned == 1 && activeSkillLookup.ContainsKey(sl.SkillHash))
+                            {
+                                hasLv1Move = true;
+                                break;
+                            }
+                        }
+                        bool hasEg = p.FightingSpiritHash != 0;
+                        Assert.True(hasLv1Move || hasEg,
+                            $"Seed {seed}: Player 0x{p.ParamHash:X8} has NEITHER a Lv.1 active move NOR an EG! ALL players must have at least one!");
+                    }
+
                     var fullMatchIds = new HashSet<int>(
                         modded.GetStoryTeamsOnly()
                               .Where(t => t.Player6 != 0 && t.Player11 != 0)
@@ -889,7 +909,6 @@ namespace IEGORandomizer.Tests
                         var pk = paramByHash[et.Player1];
                         Assert.NotEqual(1, pk.PlayerPosition, $"Seed {seed}: 5v5 Pachanga keeper must NOT be forced to GK (Position=1)!");
                         Assert.True(pk.Catch <= 24, $"Seed {seed}: 5v5 Pachanga keeper Lv.1 Base Catch ({pk.Catch}) must not be inflated!");
-                        Assert.Equal(0, pk.FightingSpiritHash);
 
                         for (int s = 0; s < pk.SpecialMoveCount; s++)
                         {

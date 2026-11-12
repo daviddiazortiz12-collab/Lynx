@@ -39,7 +39,7 @@ jobs:
         run: |
           dotnet run --project tests/IEGORandomizer.Tests/IEGORandomizer.Tests.csproj --configuration Release
 
-      - name: Verify HTTP Host Endpoints (/api/health == 1.2.1 & Embedded UI)
+      - name: Verify HTTP Host Endpoints (/api/health == 1.2.2 & Embedded UI)
         shell: pwsh
         run: |
           dotnet build src/IEGORandomizer.App/IEGORandomizer.App.csproj --configuration Release --no-restore
@@ -52,18 +52,18 @@ jobs:
               Start-Sleep -Milliseconds 500
               try {
                 $health = Invoke-RestMethod -Uri "http://127.0.0.1:5189/api/health" -TimeoutSec 2
-                if ($health.status -eq "ok" -and $health.version -eq "1.2.1") {
+                if ($health.status -eq "ok" -and $health.version -eq "1.2.2") {
                   $ready = $true
                   break
                 }
               } catch { }
             }
             if (-not $ready) {
-              throw "IEGORandomizer v1.2.1 failed to respond on http://127.0.0.1:5189/api/health"
+              throw "IEGORandomizer v1.2.2 failed to respond on http://127.0.0.1:5189/api/health"
             }
             $indexResp = Invoke-WebRequest -Uri "http://127.0.0.1:5189/"
-            if ($indexResp.StatusCode -ne 200 -or $indexResp.Content -notmatch "v1.2.1") {
-              throw "Embedded v1.2.1 index.html check failed."
+            if ($indexResp.StatusCode -ne 200 -or $indexResp.Content -notmatch "v1.2.2") {
+              throw "Embedded v1.2.2 index.html check failed."
             }
             Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:5189/api/app/shutdown" | Out-Null
           } finally {
@@ -72,10 +72,10 @@ jobs:
             }
           }
 
-      - name: Publish Standalone Self-Contained Windows x64 Executable (.exe) v1.2.1 + 1-Click FBI Update Launchers
+      - name: Publish Standalone Self-Contained Windows x64 Executable (.exe) v1.2.2 + 1-Click FBI Update Launchers
         shell: pwsh
         run: |
-          $outDir = "publish_win64/IEGORandomizer-v1.2.1-Windows-x64"
+          $outDir = "publish_win64/IEGORandomizer-v1.2.2-Windows-x64"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
           dotnet publish src/IEGORandomizer.App/IEGORandomizer.App.csproj `
@@ -108,12 +108,12 @@ jobs:
 
           Copy-Item "src/IEGORandomizer.App/Packaging/Generar_Actualizacion_FBI_2DS_TITAN-C45C-614C.bat" "$outDir/Generar_Actualizacion_FBI_2DS_TITAN-C45C-614C.bat"
           Copy-Item "src/IEGORandomizer.App/Packaging/Generar_Actualizacion_FBI_2DS_Nueva_Semilla.bat" "$outDir/Generar_Actualizacion_FBI_2DS_Nueva_Semilla.bat"
-          Copy-Item "src/IEGORandomizer.App/Packaging/LEEME_ACTUALIZACION_FBI_2DS_v1.2.1.txt" "$outDir/LEEME_ACTUALIZACION_FBI_2DS_v1.2.1.txt"
+          Copy-Item "src/IEGORandomizer.App/Packaging/LEEME_ACTUALIZACION_FBI_2DS_v1.2.2.txt" "$outDir/LEEME_ACTUALIZACION_FBI_2DS_v1.2.2.txt"
 
-          Write-Host "Published v1.2.1 directory contents:"
+          Write-Host "Published v1.2.2 directory contents:"
           Get-ChildItem -Path $outDir | Format-Table Name, Length -AutoSize
 
-      - name: Package v1.2.1 ZIP, Create v1.2.1-win64 Release & Record Checksums
+      - name: Package v1.2.2 ZIP, Create v1.2.2-win64 Release & Record Checksums
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -122,38 +122,38 @@ jobs:
             throw "Safety check failed: original v1.0.2 release/IEGORandomizer-Windows-x64.zip must remain intact!"
           }
 
-          $v121Dir = "release/v1.2.1"
-          New-Item -ItemType Directory -Force -Path $v121Dir | Out-Null
-          $zipPath = Join-Path $env:RUNNER_TEMP "IEGORandomizer-v1.2.1-Windows-x64.zip"
+          $v122Dir = "release/v1.2.2"
+          New-Item -ItemType Directory -Force -Path $v122Dir | Out-Null
+          $zipPath = Join-Path $env:RUNNER_TEMP "IEGORandomizer-v1.2.2-Windows-x64.zip"
           if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
 
-          Compress-Archive -Path "publish_win64/IEGORandomizer-v1.2.1-Windows-x64/*" -DestinationPath $zipPath -CompressionLevel Optimal
+          Compress-Archive -Path "publish_win64/IEGORandomizer-v1.2.2-Windows-x64/*" -DestinationPath $zipPath -CompressionLevel Optimal
 
-          $exeHash = (Get-FileHash "publish_win64/IEGORandomizer-v1.2.1-Windows-x64/IEGORandomizer.exe" -Algorithm SHA256).Hash
+          $exeHash = (Get-FileHash "publish_win64/IEGORandomizer-v1.2.2-Windows-x64/IEGORandomizer.exe" -Algorithm SHA256).Hash
           $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
           $zipSizeMb = [math]::Round((Get-Item $zipPath).Length / 1MB, 2)
 
           @(
-            "$zipHash  IEGORandomizer-v1.2.1-Windows-x64.zip ($zipSizeMb MB)"
-            "$exeHash  IEGORandomizer.exe (v1.2.1)"
-          ) | Set-Content -Path "$v121Dir/SHA256SUMS.txt" -Encoding UTF8
+            "$zipHash  IEGORandomizer-v1.2.2-Windows-x64.zip ($zipSizeMb MB)"
+            "$exeHash  IEGORandomizer.exe (v1.2.2)"
+          ) | Set-Content -Path "$v122Dir/SHA256SUMS.txt" -Encoding UTF8
 
           Write-Host "Packaged $zipPath ($zipSizeMb MB) - SHA256: $zipHash"
 
-          $tagName = "v1.2.1-win64"
+          $tagName = "v1.2.2-win64"
           $existing = gh release view $tagName 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tagName $zipPath "$v121Dir/SHA256SUMS.txt" --clobber
+            gh release upload $tagName $zipPath "$v122Dir/SHA256SUMS.txt" --clobber
           } else {
-            gh release create $tagName $zipPath "$v121Dir/SHA256SUMS.txt" `
+            gh release create $tagName $zipPath "$v122Dir/SHA256SUMS.txt" `
               --target arena/799dcf14-lynx `
-              --title "IEGO Randomizer v1.2.1 (Windows x64 — Fix Anti-Softlock Porteros de Pachanga + Tiro Nv.1 Garantizado + Actualización FBI V.1.2.1)" `
-              --notes "Versión ejecutable independiente (self-contained) v1.2.1 para Windows 10/11 (64 bits) con lanzadores automáticos en 1 clic de Actualización FBI (V.1.2.1 = 1057 > V.1.2.0 = 1056) para Nintendo 2DS/3DS. Corrige de raíz el softlock en pachangas tempranas: (1) Garantía 100% de supertécnica individual de TIRO (whsXXXX, PartnerNumber <= 1, PT <= 45) a Nivel 1 en Arion (para_cp0008), Riccardo (para_cp0009) y al menos 2 titulares tempranos más del Raimon, con PT suficientes para tirar varias veces desde el minuto 0; (2) Fin de los porteros muro en pachangas 5v5: los jugadores en portería de pachanga ya nunca son forzados a Posición=Portero, ni reciben paradas de portero whkXXXX a Nv.1, ni Espíritu Guerrero inicial, ni Guantes de portero; (3) Calibración exacta de estadísticas Base Nv.1 según GOStatCalculator (0x0033E404), eliminando el suelo artificial 65..95 en Catch Nv.1 que convertía porteros de nivel 2 en muros de nivel 85; (4) Mantiene íntegros todos los arreglos y sistemas de v1.2.0 (duelo Victor btl0302, formaciones ifb01XX, técnicas dinámicas .nutb y randomización de Entrenadores, Gerentes y NPCs)."
+              --title "IEGO Randomizer v1.2.2 (Windows x64 — 100% Jugadores con Técnica Nv.1 o EG + Anti-Softlock Tiro Inicial y Pachangas + FBI V.1.2.2)" `
+              --notes "Versión ejecutable independiente (self-contained) v1.2.2 para Windows 10/11 (64 bits) con lanzadores automáticos en 1 clic de Actualización FBI (V.1.2.2 = 1058 > V.1.2.1 = 1057) para Nintendo 2DS/3DS. Garantiza: (1) EL 100% DE TODOS LOS JUGADORES JUGABLES DEL JUEGO (incluidos todos los de pachanga, reclutables, rivales y Raimon, sin excepción) vienen con AL MENOS 1 supertécnica activa a Nivel 1 (con PT suficientes) o 1 Espíritu Guerrero inicial jugable (FightingSpiritHash + FightingSpiritMatchkHash); (2) Garantía 100% de supertécnica individual de TIRO (whsXXXX, PartnerNumber <= 1, PT <= 45) a Nivel 1 en Arion (para_cp0008), Riccardo (para_cp0009) y al menos 2 titulares tempranos más del Raimon; (3) Anti-softlock en porterías de pachanga 5v5: los jugadores en portería de pachanga reciben su técnica Nv.1 o EG de campo (Tiro/Regate/Bloqueo, nunca paradas de portero whkXXXX/wkkXXXX ni Catch inflado a 65..95); (4) Incluye todos los arreglos de v1.2.0 (duelo Victor btl0302, formaciones ifb01XX, técnicas dinámicas .nutb y randomización de Entrenadores, Gerentes y NPCs)."
           }
 
           git checkout -- NuGet.Config
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f "$v121Dir/SHA256SUMS.txt"
-          git diff --cached --quiet || (git commit -m "chore(release): record Windows x64 self-contained v1.2.1 release checksums [skip ci]" && git push origin HEAD:arena/799dcf14-lynx)
+          git add -f "$v122Dir/SHA256SUMS.txt"
+          git diff --cached --quiet || (git commit -m "chore(release): record Windows x64 self-contained v1.2.2 release checksums [skip ci]" && git push origin HEAD:arena/799dcf14-lynx)

@@ -439,6 +439,13 @@ namespace IEGORandomizer.Engine.Modules
                             forcedEarlyShooterHashes.Add(h);
                     }
 
+                    var saveSpiritHashes = new HashSet<int>(
+                        avatars.Where(a => a.AvatarHash != 0 && wkkSet.Contains(a.SpecialMoveID))
+                               .Select(a => a.AvatarHash));
+                    var nonSaveAvatarPool = validAvatarPool.Where(h => !saveSpiritHashes.Contains(h)).ToList();
+                    if (nonSaveAvatarPool.Count == 0)
+                        nonSaveAvatarPool = validAvatarPool;
+
                     foreach (var cp in charaParams)
                     {
                         if (cp.ParamHash == 0)
@@ -451,24 +458,22 @@ namespace IEGORandomizer.Engine.Modules
                         if (!options.GuaranteeInitialMoveOrSpiritForAllPlayers && !isArion)
                             continue;
 
-                        // Never force a Level-1 move or initial EG onto a pure 5v5 pachanga goal-slot scout!
-                        if (isPachangaOnlyKeeper)
+                        // Ensure 5v5 pachanga goal-slot players NEVER keep GK Save (whkXXXX) moves in early slots,
+                        // while STILL giving 100% of them at least 1 Level-1 field technique OR 1 non-Save EG below!
+                        if (isPachangaOnlyKeeper &&
+                            cp.SpecialMoveCount > 0 &&
+                            cp.SpecialMoveOffset >= 0 &&
+                            cp.SpecialMoveOffset + cp.SpecialMoveCount <= skillTable.Length)
                         {
-                            if (cp.SpecialMoveCount > 0 &&
-                                cp.SpecialMoveOffset >= 0 &&
-                                cp.SpecialMoveOffset + cp.SpecialMoveCount <= skillTable.Length)
+                            for (int s = 0; s < cp.SpecialMoveCount; s++)
                             {
-                                for (int s = 0; s < cp.SpecialMoveCount; s++)
+                                var stEntry = skillTable[cp.SpecialMoveOffset + s];
+                                if (stEntry.LevelLearned <= 5 && whkSet.Contains(stEntry.SkillHash) && nonSaveFieldMoves.Count > 0)
                                 {
-                                    var stEntry = skillTable[cp.SpecialMoveOffset + s];
-                                    if (stEntry.LevelLearned <= 5 && whkSet.Contains(stEntry.SkillHash) && nonSaveFieldMoves.Count > 0)
-                                    {
-                                        stEntry.SkillHash = starterRng.PickOne(nonSaveFieldMoves).SkillHash;
-                                        skillTableModified = true;
-                                    }
+                                    stEntry.SkillHash = starterRng.PickOne(nonSaveFieldMoves).SkillHash;
+                                    skillTableModified = true;
                                 }
                             }
-                            continue;
                         }
 
                         if (cp.SpecialMoveCount <= 0 ||
@@ -483,7 +488,10 @@ namespace IEGORandomizer.Engine.Modules
                                 !protection.ProtectedAvatarBearerParamHashes.Contains(cp.ParamHash) &&
                                 (visualProfile == null || visualProfile.CoherentPlayableParamHashes.Contains(cp.ParamHash)))
                             {
-                                cp.FightingSpiritHash = starterRng.PickOne(validAvatarPool);
+                                var egPool = isPachangaOnlyKeeper ? nonSaveAvatarPool : validAvatarPool;
+                                int grantedAv = starterRng.PickOne(egPool);
+                                cp.FightingSpiritHash = grantedAv;
+                                cp.FightingSpiritMatchkHash = grantedAv;
                                 charaParamsModified = true;
                                 report.GuaranteedInitialStarterCount++;
                             }
@@ -554,6 +562,11 @@ namespace IEGORandomizer.Engine.Modules
                         }
 
                         bool hasInitialSpirit = cp.FightingSpiritHash != 0;
+                        if (hasInitialSpirit && cp.FightingSpiritMatchkHash == 0)
+                        {
+                            cp.FightingSpiritMatchkHash = cp.FightingSpiritHash;
+                            charaParamsModified = true;
+                        }
                         bool mustForceInitialMove = isArion || isJp || mustHaveInitialSoloShot || (!hasLv1ActiveMove && !hasInitialSpirit);
 
                         if (mustHaveInitialSoloShot)
@@ -607,7 +620,7 @@ namespace IEGORandomizer.Engine.Modules
                                                   (whsSet.Contains(targetEntry.SkillHash) ||
                                                    whoSet.Contains(targetEntry.SkillHash) ||
                                                    whdSet.Contains(targetEntry.SkillHash) ||
-                                                   whkSet.Contains(targetEntry.SkillHash)) &&
+                                                   (!isPachangaOnlyKeeper && whkSet.Contains(targetEntry.SkillHash))) &&
                                                   (!skillByHash.TryGetValue(targetEntry.SkillHash, out var tCfg) || tCfg.PartnerNumber <= 1);
 
                             if (!targetIsActive ||
@@ -615,16 +628,18 @@ namespace IEGORandomizer.Engine.Modules
                                  skillByHash.TryGetValue(targetEntry.SkillHash, out var curCfg) &&
                                  curCfg.TPCost > starterTpCap))
                             {
-                                var rolePool = SelectCompatiblePool(
-                                    cp.PlayerPosition,
-                                    0,
-                                    options.EnforcePositionCompatibility,
-                                    saveMoves,
-                                    shotMoves,
-                                    dribbleMoves,
-                                    blockMoves,
-                                    activeFieldMoves,
-                                    starterRng);
+                                var rolePool = isPachangaOnlyKeeper
+                                    ? nonSaveFieldMoves
+                                    : SelectCompatiblePool(
+                                        cp.PlayerPosition,
+                                        0,
+                                        options.EnforcePositionCompatibility,
+                                        saveMoves,
+                                        shotMoves,
+                                        dribbleMoves,
+                                        blockMoves,
+                                        activeFieldMoves,
+                                        starterRng);
                                 var soloRolePool = rolePool.Where(s => s.PartnerNumber <= 1).ToList();
                                 if (soloRolePool.Count > 0)
                                     rolePool = soloRolePool;

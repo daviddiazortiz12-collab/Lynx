@@ -398,7 +398,7 @@ namespace IEGORandomizer.Tests
                 Assert.Equal((ushort)0, rep1.CiaBuildTelemetry.SourceTitleVersionRaw);
                 Assert.Equal("V.0.0.0", rep1.CiaBuildTelemetry.SourceTitleVersionFormatted);
                 Assert.Equal(CiaConstants.DefaultFbiUpdateTitleVersionRaw, rep1.CiaBuildTelemetry.TitleVersionRaw);
-                Assert.Equal("V.1.2.1", rep1.CiaBuildTelemetry.TitleVersionFormatted);
+                Assert.Equal("V.1.2.2", rep1.CiaBuildTelemetry.TitleVersionFormatted);
                 Assert.True(rep1.CiaBuildTelemetry.IsFbiInPlaceUpdateReady);
                 Assert.Equal("0004000000112F00", rep1.CiaBuildTelemetry.TitleIdHex);
                 Assert.Equal(512u * 1024u, rep1.CiaBuildTelemetry.PreservedSaveDataSizeBytes);
@@ -407,16 +407,16 @@ namespace IEGORandomizer.Tests
                 Assert.True(File.Exists(expectedLumaPatch), "Expected companion Luma3DS LayeredFS ie_a.fa to be exported.");
 
                 var inspect1 = svc.InspectLocalCia(update1Cia);
-                Assert.Equal((ushort)1057, inspect1.TmdTitleVersionRaw);
-                Assert.Equal("V.1.2.1", inspect1.TmdTitleVersionFormatted);
+                Assert.Equal((ushort)1058, inspect1.TmdTitleVersionRaw);
+                Assert.Equal("V.1.2.2", inspect1.TmdTitleVersionFormatted);
                 Assert.True(inspect1.TmdInternalHashesValid);
 
-                // 2. Chained second update (feeding V.1.2.1 .cia into RandomizeCiaToCia) -> automatically bumps to V.1.2.2 (1058)
+                // 2. Chained second update (feeding V.1.2.2 .cia into RandomizeCiaToCia) -> automatically bumps to V.1.2.3 (1059)
                 string update2Cia = Path.Combine(tempDir, "Out2", "Luz_Update2.cia");
                 var rep2 = svc.RandomizeCiaToCia(update1Cia, update2Cia, new RandomizerOptions { Seed = "FBI-UPDATE-2" });
-                Assert.Equal((ushort)1057, rep2.CiaBuildTelemetry.SourceTitleVersionRaw);
-                Assert.Equal((ushort)1058, rep2.CiaBuildTelemetry.TitleVersionRaw);
-                Assert.Equal("V.1.2.2", rep2.CiaBuildTelemetry.TitleVersionFormatted);
+                Assert.Equal((ushort)1058, rep2.CiaBuildTelemetry.SourceTitleVersionRaw);
+                Assert.Equal((ushort)1059, rep2.CiaBuildTelemetry.TitleVersionRaw);
+                Assert.Equal("V.1.2.3", rep2.CiaBuildTelemetry.TitleVersionFormatted);
                 Assert.True(rep2.CiaBuildTelemetry.IsFbiInPlaceUpdateReady);
 
                 // 3. CLI --cia-version 2.0.1 explicit override

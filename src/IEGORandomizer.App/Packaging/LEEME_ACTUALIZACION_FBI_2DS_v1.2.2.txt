@@ -1,8 +1,8 @@
 ================================================================================
-  IEGO RANDOMIZER v1.2.1 — GUÍA RÁPIDA DE ACTUALIZACIÓN FBI EN NINTENDO 2DS/3DS
+  IEGO RANDOMIZER v1.2.2 — GUÍA RÁPIDA DE ACTUALIZACIÓN FBI EN NINTENDO 2DS/3DS
 ================================================================================
 
-¿QUÉ NOVEDADES Y CORRECCIONES TRAE v1.2.1?
+¿QUÉ NOVEDADES Y CORRECCIONES TRAE v1.2.2?
 -------------------------------------------
 1. ARREGLO DEFINITIVO DEL DUELO CONTRA VICTOR BLADE (Cap. 1, btl0302) Y PARTIDOS DE HISTORIA:
    - Protegidos los duelos 1v1/2v2/3v3 de historia (btl0300..btl0399), sus formaciones
@@ -46,20 +46,20 @@ OPCIÓN A — AUTOMÁTICA EN 1 CLIC (Misma semilla TITAN-C45C-614C):
        Generar_Actualizacion_FBI_2DS_TITAN-C45C-614C.bat
      (o arrastra tu archivo .cia original de Inazuma Eleven GO Luz encima de él).
   2. Selecciona tu archivo .cia original cuando se abra la ventana de Windows.
-  3. Se creará automáticamente la carpeta "Actualizacion_FBI_v1.2.1" con el archivo:
-       *_Actualizacion_FBI_v1.2.1_TITAN-C45C-614C.cia
-     (con TitleID 0004000000112F00 y versión TMD V.1.2.1 = 1056, superior a V.1.1.2 = 1042).
+  3. Se creará automáticamente la carpeta "Actualizacion_FBI_v1.2.2" con el archivo:
+       *_Actualizacion_FBI_v1.2.2_TITAN-C45C-614C.cia
+     (con TitleID 0004000000112F00 y versión TMD V.1.2.2 = 1056, superior a V.1.1.2 = 1042).
 
 OPCIÓN B — INTERFAZ GRÁFICA COMPLETA (Para personalizar opciones o semilla):
   1. Abre IEGORandomizer.exe (se abre la ventana de la aplicación).
   2. En "Modo 1: .cia -> Nuevo .cia", elige tu .cia original y deja activado
-     "Modo Actualización FBI en 2DS/3DS (V.1.2.1)".
+     "Modo Actualización FBI en 2DS/3DS (V.1.2.2)".
   3. Pulsa "Randomizar .cia y Generar Nuevo .cia Verificado".
 
 INSTALACIÓN EN TU NINTENDO 2DS CON FBI:
   1. Copia el nuevo archivo .cia generado a la carpeta /cias/ de la tarjeta SD de tu 2DS.
   2. En tu 2DS abre FBI -> SD -> cias -> selecciona el .cia -> "Install CIA" (o "Install and delete CIA").
-  3. FBI reconocerá automáticamente la versión superior V.1.2.1 sobre tu juego instalado y lo
+  3. FBI reconocerá automáticamente la versión superior V.1.2.2 sobre tu juego instalado y lo
      actualizará directamente encima sin borrar tu archivo de guardado (00000001.sav).
      (Nota: Si quieres que Arion y el Raimon carguen en tu partida las nuevas técnicas Nv.1
      desde el principio, inicia "Partida Nueva" dentro del juego).
