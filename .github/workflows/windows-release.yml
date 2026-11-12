@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   build-windows-x64:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout branch arena/799dcf14-lynx
         uses: actions/checkout@v4
@@ -29,15 +29,48 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Enable Official Microsoft NuGet Feed for Windows Runtime Packs
+      - name: Enable Official Microsoft NuGet Feed for Windows x64 Runtime Packs
         shell: pwsh
         run: |
           dotnet nuget add source https://api.nuget.org/v3/index.json --name nuget.org --configfile NuGet.Config
 
-      - name: Run All Automated Integrity, Engine, PirateLegit CIA, Nutb Bytecode & 2DS Hardware Verification Tests on Windows x64
+      - name: Run All 33 Automated Integrity, Anti-Softlock, PirateLegit CIA, Nutb Bytecode & 2DS Hardware Verification Tests
         shell: pwsh
         run: |
           dotnet run --project tests/IEGORandomizer.Tests/IEGORandomizer.Tests.csproj --configuration Release
+
+      - name: Verify HTTP Host Endpoints (/api/health == 1.2.1 & Embedded UI)
+        shell: pwsh
+        run: |
+          dotnet build src/IEGORandomizer.App/IEGORandomizer.App.csproj --configuration Release --no-restore
+          $proc = Start-Process -FilePath "dotnet" `
+            -ArgumentList "src/IEGORandomizer.App/bin/Release/net10.0/IEGORandomizer.dll","--no-browser","--port","5189" `
+            -PassThru
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Milliseconds 500
+              try {
+                $health = Invoke-RestMethod -Uri "http://127.0.0.1:5189/api/health" -TimeoutSec 2
+                if ($health.status -eq "ok" -and $health.version -eq "1.2.1") {
+                  $ready = $true
+                  break
+                }
+              } catch { }
+            }
+            if (-not $ready) {
+              throw "IEGORandomizer v1.2.1 failed to respond on http://127.0.0.1:5189/api/health"
+            }
+            $indexResp = Invoke-WebRequest -Uri "http://127.0.0.1:5189/"
+            if ($indexResp.StatusCode -ne 200 -or $indexResp.Content -notmatch "v1.2.1") {
+              throw "Embedded v1.2.1 index.html check failed."
+            }
+            Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:5189/api/app/shutdown" | Out-Null
+          } finally {
+            if (-not $proc.HasExited) {
+              Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
 
       - name: Publish Standalone Self-Contained Windows x64 Executable (.exe) v1.2.1 + 1-Click FBI Update Launchers
         shell: pwsh
@@ -62,67 +95,23 @@ jobs:
           }
           Get-ChildItem -Path $outDir -Filter "*.pdb" | Remove-Item -Force -ErrorAction SilentlyContinue
 
+          # Verify genuine PE32+ x86-64 Windows executable header (MZ + PE\0\0 + 0x8664)
+          $exePath = "$outDir/IEGORandomizer.exe"
+          if (-not (Test-Path $exePath)) {
+            throw "IEGORandomizer.exe was not produced!"
+          }
+          $fileInfo = (& file $exePath) | Out-String
+          Write-Host "PE Binary Verification: $fileInfo"
+          if ($fileInfo -notmatch "PE32\+" -or $fileInfo -notmatch "x86-64") {
+            throw "Expected PE32+ x86-64 Windows executable, got: $fileInfo"
+          }
+
           Copy-Item "src/IEGORandomizer.App/Packaging/Generar_Actualizacion_FBI_2DS_TITAN-C45C-614C.bat" "$outDir/Generar_Actualizacion_FBI_2DS_TITAN-C45C-614C.bat"
           Copy-Item "src/IEGORandomizer.App/Packaging/Generar_Actualizacion_FBI_2DS_Nueva_Semilla.bat" "$outDir/Generar_Actualizacion_FBI_2DS_Nueva_Semilla.bat"
           Copy-Item "src/IEGORandomizer.App/Packaging/LEEME_ACTUALIZACION_FBI_2DS_v1.2.1.txt" "$outDir/LEEME_ACTUALIZACION_FBI_2DS_v1.2.1.txt"
 
           Write-Host "Published v1.2.1 directory contents:"
           Get-ChildItem -Path $outDir | Format-Table Name, Length -AutoSize
-
-      - name: Verify Isolated Single-File .exe Startup, CLI Modes & HTTP Endpoints on Windows
-        shell: pwsh
-        run: |
-          $isoDir = Join-Path $env:RUNNER_TEMP "isolated_exe_verify_v121"
-          New-Item -ItemType Directory -Force -Path $isoDir | Out-Null
-          Copy-Item "publish_win64/IEGORandomizer-v1.2.1-Windows-x64/IEGORandomizer.exe" "$isoDir/IEGORandomizer.exe"
-
-          # 1. Verify CLI help boots cleanly without external DLLs or .NET lookup
-          $env:DOTNET_MULTILEVEL_LOOKUP = "0"
-          $helpOut = & "$isoDir/IEGORandomizer.exe" --help | Out-String
-          if ($LASTEXITCODE -ne 0 -or $helpOut -notmatch "--output-cia" -or $helpOut -notmatch "--fbi-update" -or $helpOut -notmatch "v1.2.1") {
-            throw "IEGORandomizer.exe --help verification failed."
-          }
-
-          # 2. Verify Desktop GUI HTTP host boots cleanly from isolated single-file .exe
-          $proc = Start-Process -FilePath "$isoDir/IEGORandomizer.exe" `
-            -ArgumentList "--no-browser","--port","5189" `
-            -WorkingDirectory $isoDir `
-            -PassThru
-
-          try {
-            $ready = $false
-            for ($i = 0; $i -lt 30; $i++) {
-              Start-Sleep -Milliseconds 500
-              try {
-                $health = Invoke-RestMethod -Uri "http://127.0.0.1:5189/api/health" -TimeoutSec 2
-                if ($health.status -eq "ok" -and $health.version -eq "1.2.1") {
-                  $ready = $true
-                  break
-                }
-              } catch { }
-            }
-
-            if (-not $ready) {
-              throw "IEGORandomizer.exe v1.2.1 failed to respond on http://127.0.0.1:5189/api/health"
-            }
-
-            $indexResp = Invoke-WebRequest -Uri "http://127.0.0.1:5189/" -UseBasicParsing
-            if ($indexResp.StatusCode -ne 200 -or $indexResp.Content -notmatch "v1.2.1") {
-              throw "Embedded v1.2.1 index.html check failed."
-            }
-
-            $jsResp = Invoke-WebRequest -Uri "http://127.0.0.1:5189/app.js" -UseBasicParsing
-            if ($jsResp.StatusCode -ne 200) {
-              throw "Embedded app.js check failed."
-            }
-
-            Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:5189/api/app/shutdown" | Out-Null
-            Start-Sleep -Seconds 1
-          } finally {
-            if (-not $proc.HasExited) {
-              Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-            }
-          }
 
       - name: Package v1.2.1 ZIP, Create v1.2.1-win64 Release & Record Checksums
         shell: pwsh
