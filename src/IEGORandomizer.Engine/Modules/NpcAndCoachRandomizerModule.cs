@@ -5,13 +5,15 @@ using IEGORandomizer.Engine.Configuration;
 using IEGORandomizer.Engine.Protection;
 using IEGORandomizer.Engine.Seeding;
 using IEGORandomizer.Engine.Validation;
+using Lynx.Core.Binary;
 using Lynx.Core.Games;
 using Lynx.Core.Maps;
 using Lynx.Core.RomFs;
 using Lynx.InazumaEleven.Games.GO;
 using Lynx.InazumaEleven.Logic;
-using StudioElevenLib.Level5.Text;
-using StudioElevenLib.Level5.Text.Logic;
+using StudioElevenLib.Level5.Binary;
+using StudioElevenLib.Level5.Binary.Collections;
+using StudioElevenLib.Level5.Binary.Logic;
 
 namespace IEGORandomizer.Engine.Modules
 {
@@ -59,6 +61,7 @@ namespace IEGORandomizer.Engine.Modules
                     game,
                     seeds.GetSubsystem("npcs.managers"),
                     charaBases,
+                    protection,
                     visualProfile,
                     report))
                 {
@@ -149,6 +152,7 @@ namespace IEGORandomizer.Engine.Modules
             game.SaveItems(directors);
 
             // Synchronize Dir-{ItemNumber}-1 and Dir-{ItemNumber}-2 across all system_text*.cfg.bin files
+            // STRICTLY IN-PLACE via CfgBin<CfgTreeNode> (NEVER T2bþ.Save(), which forces 4-column IEGO2/3 variance=true!)
             var textDir = game.IE_A?.Directory?.GetFolderFromFullPath("/data/res/text");
             if (textDir != null)
             {
@@ -165,58 +169,151 @@ namespace IEGORandomizer.Engine.Modules
                     if (rawBytes == null || rawBytes.Length == 0)
                         continue;
 
-                    try
+                    if (TryUpdateCoachTextsInPlace(rawBytes, validDirectors, derangedIndices, out byte[] updatedBytes))
                     {
-                        var t2b = new T2bþ(rawBytes);
-                        var line1Snap = new TextConfig[validDirectors.Count];
-                        var line2Snap = new TextConfig[validDirectors.Count];
-
-                        for (int i = 0; i < validDirectors.Count; i++)
-                        {
-                            int num = validDirectors[i].ItemNumber;
-                            int crc1 = Level5IdHelper.ComputeCrc32Utf8($"Dir-{num}-1");
-                            int crc2 = Level5IdHelper.ComputeCrc32Utf8($"Dir-{num}-2");
-                            t2b.Texts.TryGetValue(crc1, out line1Snap[i]);
-                            t2b.Texts.TryGetValue(crc2, out line2Snap[i]);
-                        }
-
-                        bool anyTextChanged = false;
-                        for (int i = 0; i < validDirectors.Count; i++)
-                        {
-                            int targetNum = validDirectors[i].ItemNumber;
-                            int donorIdx = derangedIndices[i];
-                            int crc1 = Level5IdHelper.ComputeCrc32Utf8($"Dir-{targetNum}-1");
-                            int crc2 = Level5IdHelper.ComputeCrc32Utf8($"Dir-{targetNum}-2");
-
-                            if (line1Snap[donorIdx] != null)
-                            {
-                                t2b.Texts[crc1] = line1Snap[donorIdx];
-                                anyTextChanged = true;
-                            }
-                            if (line2Snap[donorIdx] != null)
-                            {
-                                t2b.Texts[crc2] = line2Snap[donorIdx];
-                                anyTextChanged = true;
-                            }
-                        }
-
-                        if (anyTextChanged)
-                        {
-                            Arc0SafeArchive.WriteFileAtPath(game.IE_A.Directory, fullPath, t2b.Save());
-                        }
-                    }
-                    catch
-                    {
-                        // Leave custom/minimal synthetic text stubs untouched if not T2bþ-formatted
+                        Arc0SafeArchive.WriteFileAtPath(game.IE_A.Directory, fullPath, updatedBytes);
                     }
                 }
             }
+        }
+
+        private static bool TryUpdateCoachTextsInPlace(
+            byte[] rawBytes,
+            List<GOSupport.ItemConfigDirector> validDirectors,
+            List<int> derangedIndices,
+            out byte[] updatedBytes)
+        {
+            updatedBytes = null;
+            try
+            {
+                var cfg = new CfgBin<CfgTreeNode>();
+                cfg.Open(rawBytes);
+
+                var textNodesByHash = new Dictionary<int, List<(int LineNum, Variable StringVar)>>();
+                CollectTextInfoStringVariables(cfg.Entries.Children.OfType<CfgTreeNode>(), textNodesByHash);
+
+                if (textNodesByHash.Count == 0)
+                    return false;
+
+                var line1Snap = new Dictionary<int, string>[validDirectors.Count];
+                var line2Snap = new Dictionary<int, string>[validDirectors.Count];
+
+                for (int i = 0; i < validDirectors.Count; i++)
+                {
+                    int num = validDirectors[i].ItemNumber;
+                    int crc1 = Level5IdHelper.ComputeCrc32Utf8($"Dir-{num}-1");
+                    int crc2 = Level5IdHelper.ComputeCrc32Utf8($"Dir-{num}-2");
+
+                    if (textNodesByHash.TryGetValue(crc1, out var list1))
+                    {
+                        line1Snap[i] = list1.ToDictionary(x => x.LineNum, x => x.StringVar.Value as string ?? string.Empty);
+                    }
+                    if (textNodesByHash.TryGetValue(crc2, out var list2))
+                    {
+                        line2Snap[i] = list2.ToDictionary(x => x.LineNum, x => x.StringVar.Value as string ?? string.Empty);
+                    }
+                }
+
+                bool anyChanged = false;
+                for (int i = 0; i < validDirectors.Count; i++)
+                {
+                    int targetNum = validDirectors[i].ItemNumber;
+                    int donorIdx = derangedIndices[i];
+                    int crc1 = Level5IdHelper.ComputeCrc32Utf8($"Dir-{targetNum}-1");
+                    int crc2 = Level5IdHelper.ComputeCrc32Utf8($"Dir-{targetNum}-2");
+
+                    if (line1Snap[donorIdx] != null && textNodesByHash.TryGetValue(crc1, out var targetList1))
+                    {
+                        anyChanged |= ApplySnapshotToTextVariables(targetList1, line1Snap[donorIdx]);
+                    }
+                    if (line2Snap[donorIdx] != null && textNodesByHash.TryGetValue(crc2, out var targetList2))
+                    {
+                        anyChanged |= ApplySnapshotToTextVariables(targetList2, line2Snap[donorIdx]);
+                    }
+                }
+
+                if (!anyChanged)
+                    return false;
+
+                updatedBytes = cfg.Save();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void CollectTextInfoStringVariables(
+            IEnumerable<CfgTreeNode> nodes,
+            Dictionary<int, List<(int LineNum, Variable StringVar)>> byHash)
+        {
+            if (nodes == null)
+                return;
+
+            foreach (var node in nodes)
+            {
+                if (node?.Item != null &&
+                    string.Equals(node.Item.Name, "TEXT_INFO", StringComparison.Ordinal) &&
+                    node.Item.Variables != null &&
+                    node.Item.Variables.Count >= 3)
+                {
+                    var vars = node.Item.Variables;
+                    if (Level5CfgValueParser.TryReadInt32(vars[0], out int crc) &&
+                        Level5CfgValueParser.TryReadInt32(vars[1], out int lineNum))
+                    {
+                        Variable strVar = null;
+                        for (int v = vars.Count - 1; v >= 2; v--)
+                        {
+                            if (vars[v]?.Type == CfgValueType.String)
+                            {
+                                strVar = vars[v];
+                                break;
+                            }
+                        }
+
+                        if (strVar != null)
+                        {
+                            if (!byHash.TryGetValue(crc, out var list))
+                            {
+                                list = new List<(int LineNum, Variable StringVar)>();
+                                byHash[crc] = list;
+                            }
+                            list.Add((lineNum, strVar));
+                        }
+                    }
+                }
+
+                if (node?.Children != null && node.Children.Count > 0)
+                {
+                    CollectTextInfoStringVariables(node.Children.OfType<CfgTreeNode>(), byHash);
+                }
+            }
+        }
+
+        private static bool ApplySnapshotToTextVariables(
+            List<(int LineNum, Variable StringVar)> targetVars,
+            Dictionary<int, string> donorByLine)
+        {
+            bool changed = false;
+            string fallback = donorByLine.Values.FirstOrDefault() ?? string.Empty;
+            foreach (var (lineNum, strVar) in targetVars)
+            {
+                string nextVal = donorByLine.TryGetValue(lineNum, out string exact) ? exact : fallback;
+                if (!string.Equals(strVar.Value as string, nextVal, StringComparison.Ordinal))
+                {
+                    strVar.Value = nextVal;
+                    changed = true;
+                }
+            }
+            return changed;
         }
 
         private static bool RandomizeManagers(
             SafeGOGame game,
             DeterministicRng rng,
             ICharabase[] charaBases,
+            StoryProtectionContext protection,
             VisualCoherenceProfile visualProfile,
             RandomizationExecutionReport report)
         {
@@ -231,7 +328,8 @@ namespace IEGORandomizer.Engine.Modules
             if (managers.Count == 0)
                 return false;
 
-            // Build pool of coherent female CharaBaseType == 1 characters grouped by exact (Body, Gender)
+            // Build pool of coherent female CharaBaseType == 1 characters grouped by exact (Body, Gender),
+            // strictly excluding protected story soccer players so story rosters never get double-swapped!
             var coherentCandidates = charaBases
                 .Where(cb => cb.CharaBaseType == 1 &&
                              cb.ModelNumber > 0 &&
@@ -239,7 +337,8 @@ namespace IEGORandomizer.Engine.Modules
                              cb.Body > 0 &&
                              cb.Gender == 2 &&
                              (managerSet.Contains(cb.ModelNumber) ||
-                              visualProfile.CoherentPlayableBaseHashes.Contains(cb.BaseHash)))
+                              (visualProfile.CoherentPlayableBaseHashes.Contains(cb.BaseHash) &&
+                               (protection == null || !protection.ProtectedStoryPlayerBaseHashes.Contains(cb.BaseHash)))))
                 .OrderBy(cb => cb.ModelNumber)
                 .ToList();
 
@@ -344,6 +443,16 @@ namespace IEGORandomizer.Engine.Modules
             return anySwapped;
         }
 
+        private static readonly Lazy<HashSet<int>> EventCutsceneNpcIdHashes = new(() =>
+        {
+            var set = new HashSet<int>(10000);
+            for (int i = 0; i <= 9999; i++)
+            {
+                set.Add(Level5IdHelper.ComputeCrc32Utf8($"evc{i:D4}"));
+            }
+            return set;
+        });
+
         private static void RandomizeOverworldMapNpcs(
             SafeGOGame game,
             DeterministicRng rng,
@@ -365,47 +474,31 @@ namespace IEGORandomizer.Engine.Modules
                 }
             }
 
-            // Build rig-compatible HeadID pools strictly partitioned by (Type, RangeBucket, Body, Gender):
-            // - Bucket 0: Type == 1 (cpXXXX coherent human models < 2048)
-            // - Bucket 1: Type == 3 stand-event human NPCs (cn0001..cn0099, excluding special rigs {13, 15, 19, 45})
-            // - Bucket 2: Type == 3 overworld town human NPCs (cn1001..cn1999)
-            var headPools = new Dictionary<(int Type, int Bucket, int Body, int Gender), List<int>>();
+            // Build rig-compatible HeadID pools strictly for generic overworld town pedestrians (Type == 3, cn1000..cn1999).
+            // CRITICAL COHERENCE INVARIANT:
+            // - Type == 1 (cpXXXX soccer players & managers) and Type == 3 < 1000 (cn0001..cn0099 named story NPCs)
+            //   MUST keep their exact HeadId in .npc.bin so map/cutscene actors (e.g. CreateEvHiMdlForNPCID("evcXXXX"))
+            //   automatically display the exact same character as matches (para_cpXXXX) and 2D dialogue portraits!
+            var headPools = new Dictionary<(int Body, int Gender), List<int>>();
 
             foreach (var cb in charaBases)
             {
-                if (cb.Body <= 0 || cb.Body > 8)
+                if (cb.CharaBaseType != 3 ||
+                    cb.Body <= 0 ||
+                    cb.Body > 8 ||
+                    cb.ModelNumber < 1000 ||
+                    cb.ModelNumber > 1999)
+                {
                     continue;
-
-                int bucket = -1;
-                if (cb.CharaBaseType == 1 &&
-                    cb.ModelNumber > 0 &&
-                    cb.ModelNumber < VisualCoherenceValidator.MaxEngineModelNumberExclusive &&
-                    visualProfile.CoherentPlayableBaseHashes.Contains(cb.BaseHash))
-                {
-                    bucket = 0;
-                }
-                else if (cb.CharaBaseType == 3 &&
-                         cb.ModelNumber >= 1 &&
-                         cb.ModelNumber <= 99 &&
-                         !SpecialCutsceneNpcModels.Contains(cb.ModelNumber) &&
-                         (visualProfile.CoherentStandEventNpcBaseHashes.Count == 0 ||
-                          visualProfile.CoherentStandEventNpcBaseHashes.Contains(cb.BaseHash)))
-                {
-                    bucket = 1;
-                }
-                else if (cb.CharaBaseType == 3 &&
-                         cb.ModelNumber >= 1000 &&
-                         cb.ModelNumber <= 1999 &&
-                         (visualProfile.ValidOverworldNpcModelNumbers.Count == 0 ||
-                          visualProfile.ValidOverworldNpcModelNumbers.Contains(cb.ModelNumber)))
-                {
-                    bucket = 2;
                 }
 
-                if (bucket < 0)
+                if (visualProfile.ValidOverworldNpcModelNumbers.Count > 0 &&
+                    !visualProfile.ValidOverworldNpcModelNumbers.Contains(cb.ModelNumber))
+                {
                     continue;
+                }
 
-                var key = (cb.CharaBaseType, bucket, cb.Body, cb.Gender);
+                var key = (cb.Body, cb.Gender);
                 if (!headPools.TryGetValue(key, out var list))
                 {
                     list = new List<int>();
@@ -419,16 +512,19 @@ namespace IEGORandomizer.Engine.Modules
                 list.Sort();
             }
 
+            var evcHashes = EventCutsceneNpcIdHashes.Value;
             var modifiedEntries = new List<MapNpcBaseEntry>();
             foreach (var entry in mapNpcs)
             {
                 var rec = entry.Record;
-                // Strictly quarantine Type == 4 (animals/props caXXXX!) and special cutscene rigs!
-                if (rec.Type != 1 && rec.Type != 3)
+                // Strictly preserve:
+                // - evcXXXX scripted cutscene actor slots (CreateEvHiMdlForNPCID / CreateEvLowMdlForNPCID)
+                // - Type == 1 (cpXXXX playable/story soccer characters & managers -> 100% cutscene/map/match sync!)
+                // - Type == 3 < 1000 (cn0001..cn0099 named story NPCs -> already swapped globally in RandomizeStoryNpcs!)
+                // - Type == 4 (caXXXX animals/props)
+                if (evcHashes.Contains(rec.NpcId))
                     continue;
-                if (rec.HeadId <= 0 || rec.HeadId >= 9000)
-                    continue;
-                if (rec.Type == 3 && SpecialCutsceneNpcModels.Contains(rec.HeadId))
+                if (rec.Type != 3 || rec.HeadId < 1000 || rec.HeadId > 1999)
                     continue;
 
                 if (!cbByTypeAndHead.TryGetValue((rec.Type, rec.HeadId), out var origCb) ||
@@ -438,8 +534,7 @@ namespace IEGORandomizer.Engine.Modules
                     continue;
                 }
 
-                int bucket = rec.Type == 1 ? 0 : (rec.HeadId < 1000 ? 1 : 2);
-                if (!headPools.TryGetValue((rec.Type, bucket, origCb.Body, origCb.Gender), out var pool) ||
+                if (!headPools.TryGetValue((origCb.Body, origCb.Gender), out var pool) ||
                     pool.Count < 2)
                 {
                     continue;
@@ -526,6 +621,8 @@ namespace IEGORandomizer.Engine.Modules
             if (bust == null || rpg == null)
                 return false;
 
+            byte[] waza = Arc0SafeArchive.TryReadFileFromPath(root, $"/data/chr/model/waza/face/{code}a.xc");
+
             snapshot = new CnVisualSnapshot(
                 cb.NameHash,
                 cb.NicknameHash,
@@ -533,7 +630,8 @@ namespace IEGORandomizer.Engine.Modules
                 cb.Skin,
                 cb.Year,
                 bust,
-                rpg);
+                rpg,
+                waza);
             return true;
         }
 
@@ -551,6 +649,10 @@ namespace IEGORandomizer.Engine.Modules
 
             Arc0SafeArchive.WriteFileAtPath(root, $"/data/bustup/face/{code}a.xi", donor.Bustup);
             Arc0SafeArchive.WriteFileAtPath(root, $"/data/chr/model/rpg/face/{code}m.xc", donor.RpgModel);
+            if (donor.WazaModel != null)
+            {
+                Arc0SafeArchive.WriteFileAtPath(root, $"/data/chr/model/waza/face/{code}a.xc", donor.WazaModel);
+            }
         }
 
         private readonly record struct CpVisualSnapshot(
@@ -570,7 +672,8 @@ namespace IEGORandomizer.Engine.Modules
             int Skin,
             int Year,
             byte[] Bustup,
-            byte[] RpgModel);
+            byte[] RpgModel,
+            byte[] WazaModel);
 
         private sealed class DirectorProfileSnapshot
         {

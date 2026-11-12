@@ -13,6 +13,11 @@ namespace Lynx.Core.RomFs.Cia
         public string RelativePath { get; init; } = string.Empty;
         public long Length { get; init; }
         public Action<Stream> WriteContentTo { get; init; } = _ => { };
+        /// <summary>
+        /// Optional relative path of another file in the same RomFS whose Level-3 <c>(DataRelativeOffset, DataLength)</c>
+        /// slice this entry should alias without writing duplicate physical bytes.
+        /// </summary>
+        public string AliasOfRelativePath { get; init; }
     }
 
     public sealed class IvfcBuildResult
@@ -53,11 +58,12 @@ namespace Lynx.Core.RomFs.Cia
             public string FullRelativePath { get; init; } = string.Empty;
             public DirNode Parent { get; init; }
             public RomFsBuildFileSpec Spec { get; init; }
+            public FileNode AliasTarget { get; set; }
 
             public uint MetaByteOffset { get; set; }
             public uint SiblingMetaOffset { get; set; } = IvfcRomFsReader.UnusedOffset;
             public ulong DataRelativeOffset { get; set; }
-            public ulong DataLength => (ulong)Spec.Length;
+            public ulong DataLength => AliasTarget != null ? AliasTarget.DataLength : (ulong)Spec.Length;
             public uint NextHashBucketOffset { get; set; } = IvfcRomFsReader.UnusedOffset;
             public byte[] NameUtf16Bytes { get; init; } = Array.Empty<byte>();
         }
@@ -121,11 +127,15 @@ namespace Lynx.Core.RomFs.Cia
                 string norm = NormalizeRelPath(spec.RelativePath);
                 if (string.IsNullOrEmpty(norm))
                     continue;
+                string normAlias = string.IsNullOrWhiteSpace(spec.AliasOfRelativePath)
+                    ? null
+                    : NormalizeRelPath(spec.AliasOfRelativePath);
                 dedupFiles[norm] = new RomFsBuildFileSpec
                 {
                     RelativePath = norm,
                     Length = spec.Length,
-                    WriteContentTo = spec.WriteContentTo
+                    WriteContentTo = spec.WriteContentTo,
+                    AliasOfRelativePath = normAlias
                 };
             }
 
@@ -169,12 +179,34 @@ namespace Lynx.Core.RomFs.Cia
                 dirMetaCursor += 0x18u + (uint)CiaConstants.AlignUp(d.NameUtf16Bytes.Length, 4);
             }
 
+            var fileNodeByPath = new Dictionary<string, FileNode>(allFiles.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var f in allFiles)
+            {
+                fileNodeByPath[f.FullRelativePath] = f;
+            }
+
+            foreach (var f in allFiles)
+            {
+                if (!string.IsNullOrEmpty(f.Spec.AliasOfRelativePath) &&
+                    fileNodeByPath.TryGetValue(f.Spec.AliasOfRelativePath, out var targetNode) &&
+                    !ReferenceEquals(targetNode, f) &&
+                    string.IsNullOrEmpty(targetNode.Spec.AliasOfRelativePath))
+                {
+                    f.AliasTarget = targetNode;
+                }
+            }
+
             uint fileMetaCursor = 0;
             long fileDataCursor = 0;
             foreach (var f in allFiles)
             {
                 f.MetaByteOffset = fileMetaCursor;
                 fileMetaCursor += 0x20u + (uint)CiaConstants.AlignUp(f.NameUtf16Bytes.Length, 4);
+
+                if (f.AliasTarget != null)
+                {
+                    continue;
+                }
 
                 if (f.Spec.Length > 0)
                 {
@@ -186,6 +218,14 @@ namespace Lynx.Core.RomFs.Cia
                 {
                     // Per Nintendo makerom (romfs_gen.c:276), empty files store dataoffset = 0 without advancing u_dataLen
                     f.DataRelativeOffset = 0;
+                }
+            }
+
+            foreach (var f in allFiles)
+            {
+                if (f.AliasTarget != null)
+                {
+                    f.DataRelativeOffset = f.AliasTarget.DataRelativeOffset;
                 }
             }
 
@@ -322,7 +362,7 @@ namespace Lynx.Core.RomFs.Cia
 
                 foreach (var f in allFiles)
                 {
-                    if (f.Spec.Length == 0)
+                    if (f.AliasTarget != null || f.Spec.Length == 0)
                         continue;
 
                     long padNeeded = (long)f.DataRelativeOffset - currentDataWritten;

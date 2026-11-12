@@ -79,11 +79,11 @@ namespace Lynx.Core.RomFs.Cia
         }
 
         /// <summary>
-        /// Default FBI in-place update revision (V.1.2.2 = (1 &lt;&lt; 10) | (2 &lt;&lt; 4) | 2 = 1058 = 0x0422, strictly &gt; V.1.2.1 = 1057).
+        /// Default FBI in-place update revision (V.1.2.3 = (1 &lt;&lt; 10) | (2 &lt;&lt; 4) | 3 = 1059 = 0x0423, strictly &gt; V.1.2.2 = 1058).
         /// Installing a .cia with the same base TitleID (e.g. 0004000000112F00) and a higher TMD TitleVersion
         /// in FBI updates title/00040000/&lt;TitleID_Low&gt;/content/ in place without deleting data/00000001.sav.
         /// </summary>
-        public const ushort DefaultFbiUpdateTitleVersionRaw = (1 << 10) | (2 << 4) | 2; // 1058 (V.1.2.2)
+        public const ushort DefaultFbiUpdateTitleVersionRaw = (1 << 10) | (2 << 4) | 3; // 1059 (V.1.2.3)
 
         public static ushort EncodeTitleVersion(int major, int minor, int micro)
         {
@@ -179,6 +179,14 @@ namespace Lynx.Core.RomFs.Cia
         /// Optional explicit 16-bit TMD TitleVersion override (encoded as (major &lt;&lt; 10) | (minor &lt;&lt; 4) | micro).
         /// </summary>
         public ushort? TargetTitleVersionRaw { get; set; }
+
+        /// <summary>
+        /// When true, deduplicates non-Spanish localized media streams (<c>_de</c>, <c>_en</c>, <c>_fr</c>, <c>_it</c>
+        /// <c>.bcstm</c> and <c>.moflex</c>) via IVFC Level-3 <c>DataRelativeOffset</c> aliasing to their <c>_es</c>
+        /// counterpart so 100% of RomFS directory/file entries remain valid while reducing multi-5 European <c>.cia</c>
+        /// size below 2 GiB (~1.6 GB) for faster 2DS SD installation and direct GitHub Releases hosting.
+        /// </summary>
+        public bool DeduplicateOtherLanguageStreamsToSpanish { get; set; }
     }
 
     public sealed class CiaTmdChunkInfo

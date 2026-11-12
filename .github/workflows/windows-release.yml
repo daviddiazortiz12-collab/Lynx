@@ -1,14 +1,6 @@
 name: Build & Verify Windows Self-Contained Release
 
 on:
-  push:
-    branches:
-      - arena/799dcf14-lynx
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'IEGORandomizer.sln'
-      - '.github/workflows/windows-release.yml'
   workflow_dispatch:
 
 permissions:
@@ -52,7 +44,7 @@ jobs:
               Start-Sleep -Milliseconds 500
               try {
                 $health = Invoke-RestMethod -Uri "http://127.0.0.1:5189/api/health" -TimeoutSec 2
-                if ($health.status -eq "ok" -and $health.version -eq "1.2.2") {
+                if ($health.status -eq "ok" -and $health.version -eq "1.2.3") {
                   $ready = $true
                   break
                 }

@@ -247,22 +247,13 @@ namespace Lynx.Core.Games
         public new void SaveAvatars(IAvatar[] avatars)
         {
             var cfg = OpenCfgFile("item_config");
-            CfgTreeNode avatarBegin = cfg.Entries.FindByName("ITEM_AVATAR_BEGIN");
-            int existingCount = avatarBegin?.Children.OfType<CfgTreeNode>().Count(c => c.Item?.Name == "ITEM_AVATAR") ?? 0;
-
-            if (avatarBegin != null && existingCount == avatars.Length)
-            {
-                Level5CfgBinAdapter.UpdateEntriesInPlace(
-                    cfg.Entries,
-                    "ITEM_AVATAR_BEGIN",
-                    "ITEM_AVATAR",
-                    avatars,
-                    "item_config.cfg.bin");
-                WriteGameFileContent("item_config", cfg.Save());
-                return;
-            }
-
-            base.SaveAvatars(avatars);
+            Level5CfgBinAdapter.UpdateEntriesInPlace(
+                cfg.Entries,
+                "ITEM_AVATAR_BEGIN",
+                "ITEM_AVATAR",
+                avatars,
+                "item_config.cfg.bin");
+            WriteGameFileContent("item_config", cfg.Save());
         }
 
         public new ISoccerInfo[] GetSoccers()
@@ -355,26 +346,24 @@ namespace Lynx.Core.Games
 
         public new void SaveItems<T>(T[] items) where T : class, IItemConfig
         {
-            if (typeof(T) == typeof(ItemConfigPalpackCard))
+            (string beginName, string entryName) = typeof(T) switch
             {
-                var cfg = OpenCfgFile("item_config");
-                CfgTreeNode kizunaxBegin = cfg.Entries.FindByName("ITEM_KIZUNAX_BEGIN");
-                int existingCount = kizunaxBegin?.Children.OfType<CfgTreeNode>().Count(c => c.Item?.Name == "ITEM_KIZUNAX") ?? 0;
+                Type t when t == typeof(ItemConfigPalpackCard) => ("ITEM_KIZUNAX_BEGIN", "ITEM_KIZUNAX"),
+                Type t when t == typeof(ItemConfigDirector) => ("ITEM_DIRECTOR_BEGIN", "ITEM_DIRECTOR"),
+                Type t when t == typeof(ItemConfigUniform) => ("ITEM_UNIFORM_BEGIN", "ITEM_UNIFORM"),
+                Type t when t == typeof(ItemConfigAvatar) => ("ITEM_AVATAR_BEGIN", "ITEM_AVATAR"),
+                _ => throw new NotSupportedException(
+                    $"SafeGOGame.SaveItems<{typeof(T).Name}> rechaza la reconstrucción destructiva de ITEM_REF. Use actualización in-place explícita.")
+            };
 
-                if (kizunaxBegin != null && existingCount == items.Length)
-                {
-                    Level5CfgBinAdapter.UpdateEntriesInPlace(
-                        cfg.Entries,
-                        "ITEM_KIZUNAX_BEGIN",
-                        "ITEM_KIZUNAX",
-                        items,
-                        "item_config.cfg.bin");
-                    WriteGameFileContent("item_config", cfg.Save());
-                    return;
-                }
-            }
-
-            base.SaveItems(items);
+            var cfg = OpenCfgFile("item_config");
+            Level5CfgBinAdapter.UpdateEntriesInPlace(
+                cfg.Entries,
+                beginName,
+                entryName,
+                items,
+                "item_config.cfg.bin");
+            WriteGameFileContent("item_config", cfg.Save());
         }
 
         private void WriteGameFileContent(string fileKey, byte[] newBytes)

@@ -1,0 +1,127 @@
+name: Build & Publish Direct 2DS Installable Update .CIA
+
+on:
+  push:
+    branches:
+      - arena/799dcf14-lynx
+    paths:
+      - '.cia-build-request.json'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-2ds-cia:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Free Runner Disk Space (50+ GB SSD for 3DS .CIA Streaming)
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h
+
+      - name: Checkout branch arena/799dcf14-lynx
+        uses: actions/checkout@v4
+        with:
+          ref: arena/799dcf14-lynx
+          fetch-depth: 0
+
+      - name: Setup .NET 10.0 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Enable Official Microsoft NuGet Feed
+        run: |
+          dotnet nuget add source https://api.nuget.org/v3/index.json --name nuget.org --configfile NuGet.Config
+
+      - name: Run Full 35-Test Hardware & Integrity Suite
+        run: |
+          dotnet build IEGORandomizer.sln --configuration Release
+          dotnet run --project tests/IEGORandomizer.Tests/IEGORandomizer.Tests.csproj --configuration Release --no-build
+
+      - name: Download Base .CIA & Build Cold-Verified Nintendo 2DS Update .CIA (V.1.2.3)
+        run: |
+          if [ ! -f .cia-build-request.json ]; then
+            echo "No .cia-build-request.json found; skipping."
+            exit 0
+          fi
+          GDRIVE_CIA_ID=$(jq -r '.gdriveCiaId // empty' .cia-build-request.json)
+          INPUT_PRESET=$(jq -r '.preset // "full"' .cia-build-request.json)
+          INPUT_SEED=$(jq -r '.seed // empty' .cia-build-request.json)
+          REL_TAG=$(jq -r '.releaseTag // "v1.2.3-2ds-patch"' .cia-build-request.json)
+
+          if [ -z "$GDRIVE_CIA_ID" ]; then
+            echo "ERROR: gdriveCiaId missing in .cia-build-request.json"
+            exit 1
+          fi
+          echo "::add-mask::${GDRIVE_CIA_ID}"
+
+          python3 -m pip install --quiet --upgrade gdown
+          mkdir -p /tmp/cia_work /tmp/cia_out
+          python3 -m gdown --fuzzy "https://drive.google.com/uc?id=${GDRIVE_CIA_ID}" -O /tmp/cia_work/source_base.cia
+          ls -lh /tmp/cia_work/source_base.cia
+
+          OUT_CIA="/tmp/cia_out/InazumaElevenGO_Luz_ParcheActualizacion_v1.2.3_2DS.cia"
+          SEED_ARGS=()
+          if [ -n "$INPUT_SEED" ]; then
+            SEED_ARGS=(--seed "$INPUT_SEED")
+          fi
+
+          dotnet run --project src/IEGORandomizer.App/IEGORandomizer.App.csproj --configuration Release --no-build -- \
+            --cli \
+            --input /tmp/cia_work/source_base.cia \
+            --output-cia "$OUT_CIA" \
+            --preset "$INPUT_PRESET" \
+            "${SEED_ARGS[@]}" \
+            --dedup-es \
+            --fbi-update
+
+          rm -f /tmp/cia_work/source_base.cia
+          ls -lh "$OUT_CIA"
+          SIZE_BYTES=$(stat -c%s "$OUT_CIA")
+          echo "Generated .CIA size: ${SIZE_BYTES} bytes"
+          if [ "$SIZE_BYTES" -ge 2147483648 ]; then
+            echo "ERROR: .CIA exceeds GitHub Releases 2 GiB single-asset limit (${SIZE_BYTES} bytes)."
+            exit 1
+          fi
+          (cd /tmp/cia_out && sha256sum "InazumaElevenGO_Luz_ParcheActualizacion_v1.2.3_2DS.cia" > SHA256SUMS.txt)
+          cat /tmp/cia_out/SHA256SUMS.txt
+
+      - name: Upload Installable .CIA Directly to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REL_TAG=$(jq -r '.releaseTag // "v1.2.3-2ds-patch"' .cia-build-request.json)
+          OUT_CIA="/tmp/cia_out/InazumaElevenGO_Luz_ParcheActualizacion_v1.2.3_2DS.cia"
+          NOTES_FILE="/tmp/cia_out/RELEASE_NOTES.md"
+          cat << 'EOF' > "$NOTES_FILE"
+          ## Parche de Actualización Directo `.CIA` para Nintendo 2DS / 3DS — `V.1.2.3` (`0004000000112F00`)
+
+          Archivo **`.CIA` instalable directamente en tu Nintendo 2DS con FBI**:
+          - **`InazumaElevenGO_Luz_ParcheActualizacion_v1.2.3_2DS.cia`**
+
+          ### Instalación directa en tu Nintendo 2DS
+          1. Copia `InazumaElevenGO_Luz_ParcheActualizacion_v1.2.3_2DS.cia` a la tarjeta SD de tu 2DS (o usa *Remote Install -> Scan QR Code / URL* en FBI).
+          2. En **FBI**, selecciona el `.cia` -> **Install CIA**.
+          3. Al tener `TitleID = 0004000000112F00` y versión superior `V.1.2.3` (`1059 > 1058`), **FBI actualiza el juego directamente encima sin borrar tu partida guardada (`00000001.sav`)**.
+
+          ### Correcciones incluidas en este parche `.CIA`
+          - **Sin crasheo al avanzar tras la formación del Raimon contra Caballeros Templarios (`btl0002`)**:
+            - `ITEM_REF_BEGIN` preservado al 100% en `item_config.cfg.bin` (formaciones `ifa0001`, supertácticas `iis*`, escudos y entrenadores intactos).
+            - `system_text_*.cfg.bin` actualizado in-place respetando el esquema exacto de 3 columnas de IEGO1.
+            - Esqueleto `(Body, Gender)` preservado para que Victor Blade (`para_cp0010`) cargue sin fallo su uniforme especial `903` de Caballeros Templarios en `BtlSetting()`.
+          - **Mismo aspecto en cinemáticas, mapa y partidos**:
+            - Los actores de cinemáticas (`evcXXXX`) y jugadores `Type == 1` (`cpXXXX`, como Samguk) en `.npc.bin` mantienen su `HeadId` sincronizado con `chara_base`.
+          EOF
+
+          if gh release view "$REL_TAG" >/dev/null 2>&1; then
+            gh release upload "$REL_TAG" "$OUT_CIA" /tmp/cia_out/SHA256SUMS.txt --clobber
+            gh release edit "$REL_TAG" --title "Parche Actualización Directo .CIA 2DS (V.1.2.3)" --notes-file "$NOTES_FILE"
+          else
+            gh release create "$REL_TAG" "$OUT_CIA" /tmp/cia_out/SHA256SUMS.txt \
+              --target arena/799dcf14-lynx \
+              --title "Parche Actualización Directo .CIA 2DS (V.1.2.3)" \
+              --notes-file "$NOTES_FILE"
+          fi

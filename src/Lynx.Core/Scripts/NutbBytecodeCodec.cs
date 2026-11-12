@@ -260,7 +260,7 @@ namespace Lynx.Core.Scripts
                     }
 
                     payload = decompressed;
-                    containerKind = method == 1
+                    containerKind = method != 0
                         ? NutbOuterContainerKind.Level5Lz10
                         : NutbOuterContainerKind.Level5NoCompression;
                 }
@@ -821,7 +821,8 @@ namespace Lynx.Core.Scripts
 
                 int oldTarget = (oldIp + 1) + ins.Arg1;
                 int newIp = oldIp >= insertIndex ? oldIp + delta : oldIp;
-                int newTarget = oldTarget >= insertIndex ? oldTarget + delta : oldTarget;
+                bool shiftTarget = oldIp < insertIndex ? oldTarget > insertIndex : oldTarget >= insertIndex;
+                int newTarget = shiftTarget ? oldTarget + delta : oldTarget;
                 ins.Arg1 = newTarget - (newIp + 1);
                 fn.Instructions[oldIp] = ins;
             }

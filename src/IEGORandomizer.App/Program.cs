@@ -100,7 +100,7 @@ app.MapGet("/app.js", () => ServeEmbeddedOrPhysicalAsset(resolvedWwwroot, "app.j
 app.MapGet("/api/health", () => Results.Ok(new
 {
     status = "ok",
-    version = "1.2.2",
+    version = "1.2.3",
     preservedBaseline = "1.0.2",
     app = "IEGO Randomizer (Inazuma Eleven GO: Luz y Sombra — Nintendo 2DS/3DS & PC)",
     platform = Environment.OSVersion.Platform.ToString()

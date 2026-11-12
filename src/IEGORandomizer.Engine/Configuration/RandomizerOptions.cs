@@ -145,5 +145,12 @@ namespace IEGORandomizer.Engine.Configuration
         /// (&lt;outputFolder&gt;/Luma3DS/titles/&lt;TitleID&gt;/romfs/ie_a.fa) for fast SD patching without reinstalling the 3 GB .cia.
         /// </summary>
         public bool ExportCompanionLuma3dsPatch { get; set; } = false;
+
+        /// <summary>
+        /// When enabled, aliases non-Spanish localized media streams (_de, _en, _fr, _it .bcstm &amp; .moflex)
+        /// to their _es Level-3 data offset in IVFC RomFS so 100% of file entries remain intact while shrinking
+        /// the output .cia below 2 GiB (~1.6 GB).
+        /// </summary>
+        public bool DeduplicateOtherLanguageStreamsToSpanish { get; set; } = false;
     }
 }

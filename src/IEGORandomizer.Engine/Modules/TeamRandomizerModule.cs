@@ -60,19 +60,27 @@ namespace IEGORandomizer.Engine.Modules
             // 1 = Boots, 2 = Gloves, 3 = Bracelet, 4 = Pendant
             // 17 = Palpack (NEVER a formation!), 18 = Fighting Spirit (NEVER a tactic!)
             // 19 = Formation (11v11 Match), 20 = Formation (5v5 Mini-Battle), 21 = Coach, 23 = Tactic
-            var bootsPool = allItems.Where(i => i.ItemID != 0 && i.ItemCategory == 1).Select(i => i.ItemID).Distinct().ToList();
-            var glovesPool = allItems.Where(i => i.ItemID != 0 && i.ItemCategory == 2).Select(i => i.ItemID).Distinct().ToList();
-            var braceletPool = allItems.Where(i => i.ItemID != 0 && i.ItemCategory == 3).Select(i => i.ItemID).Distinct().ToList();
-            var pendantPool = allItems.Where(i => i.ItemID != 0 && i.ItemCategory == 4).Select(i => i.ItemID).Distinct().ToList();
+            bool hasPopulatedItemNames = allItems.Any(i => i.NameID != 0);
+            bool IsNonDummyItem(IItemConfig i) => i.ItemID != 0 && (!hasPopulatedItemNames || i.NameID != 0);
+
+            var allMatchCatIds = new HashSet<int>(
+                allItems.Where(i => i.ItemID != 0 && (i.ItemCategory == 19 || ifaLookup.ContainsKey(i.ItemID))).Select(i => i.ItemID));
+            var allMiniCatIds = new HashSet<int>(
+                allItems.Where(i => i.ItemID != 0 && (i.ItemCategory == 20 || validMiniIfbHashes.Contains(i.ItemID))).Select(i => i.ItemID));
+
+            var bootsPool = allItems.Where(i => IsNonDummyItem(i) && i.ItemCategory == 1).Select(i => i.ItemID).Distinct().ToList();
+            var glovesPool = allItems.Where(i => IsNonDummyItem(i) && i.ItemCategory == 2).Select(i => i.ItemID).Distinct().ToList();
+            var braceletPool = allItems.Where(i => IsNonDummyItem(i) && i.ItemCategory == 3).Select(i => i.ItemID).Distinct().ToList();
+            var pendantPool = allItems.Where(i => IsNonDummyItem(i) && i.ItemCategory == 4).Select(i => i.ItemID).Distinct().ToList();
 
             var miniFormationSet = new HashSet<int>(
-                allItems.Where(i => i.ItemID != 0 && (i.ItemCategory == 20 || validMiniIfbHashes.Contains(i.ItemID)))
-                        .Where(i => !ifaLookup.ContainsKey(i.ItemID) && !drillIfbHashes.Contains(i.ItemID))
+                allItems.Where(i => IsNonDummyItem(i) && (i.ItemCategory == 20 || validMiniIfbHashes.Contains(i.ItemID)))
+                        .Where(i => !allMatchCatIds.Contains(i.ItemID) && !ifaLookup.ContainsKey(i.ItemID) && !drillIfbHashes.Contains(i.ItemID))
                         .Select(i => i.ItemID));
 
             var matchFormationSet = new HashSet<int>(
-                allItems.Where(i => i.ItemID != 0 && (i.ItemCategory == 19 || ifaLookup.ContainsKey(i.ItemID)))
-                        .Where(i => i.ItemRef != 90 && !validMiniIfbHashes.Contains(i.ItemID) && !drillIfbHashes.Contains(i.ItemID) && !miniFormationSet.Contains(i.ItemID))
+                allItems.Where(i => IsNonDummyItem(i) && (i.ItemCategory == 19 || ifaLookup.ContainsKey(i.ItemID)))
+                        .Where(i => i.ItemRef != 90 && !allMiniCatIds.Contains(i.ItemID) && !validMiniIfbHashes.Contains(i.ItemID) && !drillIfbHashes.Contains(i.ItemID) && !miniFormationSet.Contains(i.ItemID))
                         .Select(i => i.ItemID));
 
             // Include valid vanilla formations from unambiguously classified TeamParams (strictly excluding ifb03XX drills!)
@@ -86,7 +94,7 @@ namespace IEGORandomizer.Engine.Modules
                     miniFormationSet.Add(tp.FormationID);
                     matchFormationSet.Remove(tp.FormationID);
                 }
-                else if (ifaLookup.ContainsKey(tp.FormationID))
+                else if (ifaLookup.ContainsKey(tp.FormationID) || allMatchCatIds.Contains(tp.FormationID))
                 {
                     matchFormationSet.Add(tp.FormationID);
                     miniFormationSet.Remove(tp.FormationID);
@@ -94,12 +102,13 @@ namespace IEGORandomizer.Engine.Modules
                 else if (encountTeamIds.Contains(tp.TeamConfigID) ||
                          (miniBattleParamIds.Contains(tp.TeamParamID) && !fullMatchParamIds.Contains(tp.TeamParamID)))
                 {
-                    if (!matchFormationSet.Contains(tp.FormationID))
+                    if (!matchFormationSet.Contains(tp.FormationID) && !allMatchCatIds.Contains(tp.FormationID))
                         miniFormationSet.Add(tp.FormationID);
                 }
                 else if (storyTeamIds.Contains(tp.TeamConfigID) &&
                          !protection.ScriptedTeamConfigHashes.Contains(tp.TeamConfigID) &&
-                         !miniFormationSet.Contains(tp.FormationID))
+                         !miniFormationSet.Contains(tp.FormationID) &&
+                         !allMiniCatIds.Contains(tp.FormationID))
                 {
                     matchFormationSet.Add(tp.FormationID);
                 }
@@ -108,13 +117,16 @@ namespace IEGORandomizer.Engine.Modules
             var matchFormations = matchFormationSet.OrderBy(x => x).ToList();
             var miniFormations = miniFormationSet.OrderBy(x => x).ToList();
 
-            var coachPool = directors.Where(d => d.ItemID != 0).Select(d => d.ItemID)
-                .Concat(allItems.Where(i => i.ItemID != 0 && i.ItemCategory == 21).Select(i => i.ItemID))
+            bool hasPopulatedDirectorNames = directors.Any(d => d.NameID != 0);
+            var coachPool = directors
+                .Where(d => d.ItemID != 0 && (!hasPopulatedDirectorNames || d.NameID != 0) && (d is not Lynx.InazumaEleven.Games.GO.GOSupport.ItemConfigDirector dir || (dir.ItemNumber > 0 && dir.ItemNumber < 900)))
+                .Select(d => d.ItemID)
+                .Concat(allItems.Where(i => IsNonDummyItem(i) && i.ItemCategory == 21).Select(i => i.ItemID))
                 .Distinct()
                 .ToList();
 
             var tacticSet = new HashSet<int>(
-                allItems.Where(i => i.ItemID != 0 && (i.ItemCategory == 23 || iisLookup.ContainsKey(i.ItemID)))
+                allItems.Where(i => IsNonDummyItem(i) && (i.ItemCategory == 23 || iisLookup.ContainsKey(i.ItemID)))
                         .Where(i => i.ItemCategory != 18 && i.ItemRef != 100)
                         .Select(i => i.ItemID));
             foreach (var tp in teamParams)

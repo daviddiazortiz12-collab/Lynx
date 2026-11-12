@@ -110,6 +110,51 @@ namespace IEGORandomizer.App
                     case "--companion-luma":
                         options.Cia.ExportCompanionLuma3dsPatch = true;
                         break;
+                    case "--dedup-es":
+                        options.Cia.DeduplicateOtherLanguageStreamsToSpanish = true;
+                        break;
+                    case "--preset":
+                        if (i + 1 < args.Length)
+                        {
+                            string preset = args[++i].Trim().ToLowerInvariant();
+                            if (preset is "full" or "todo")
+                            {
+                                options.Players.Enabled = true;
+                                options.Skills.Enabled = true;
+                                options.Teams.Enabled = true;
+                                options.Rewards.Enabled = true;
+                                options.Uniforms.Enabled = true;
+                                options.Npcs.Enabled = true;
+                                options.Players.SwapStoryPlayerVisualIdentities = true;
+                                options.Skills.RandomizeSkillParameters = true;
+                                options.Teams.RandomizeLevels = true;
+                                options.Rewards.RandomizeShopItems = true;
+                            }
+                            else if (preset is "players" or "jugadores")
+                            {
+                                options.Players.Enabled = true;
+                                options.Skills.Enabled = false;
+                                options.Teams.Enabled = false;
+                                options.Rewards.Enabled = false;
+                                options.Uniforms.Enabled = false;
+                                options.Npcs.Enabled = false;
+                            }
+                            else
+                            {
+                                // "balanced" / "standard"
+                                options.Players.Enabled = true;
+                                options.Skills.Enabled = true;
+                                options.Teams.Enabled = true;
+                                options.Rewards.Enabled = true;
+                                options.Uniforms.Enabled = true;
+                                options.Npcs.Enabled = true;
+                                options.Players.SwapStoryPlayerVisualIdentities = false;
+                                options.Skills.RandomizeSkillParameters = false;
+                                options.Teams.RandomizeLevels = false;
+                                options.Rewards.RandomizeShopItems = false;
+                            }
+                        }
+                        break;
                     case "--no-blind":
                         options.BlindPlayMode = false;
                         break;

@@ -934,5 +934,236 @@ namespace IEGORandomizer.Tests
                 try { Directory.Delete(tempDir, recursive: true); } catch { }
             }
         }
+
+        [Fact]
+        public void Btl0002PostFormationCrash_AndCutsceneVsMatchSpriteCoherence_PreservesItemRef3ParamSystemTextBodyRigAndMapNpcHeads()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "iego_btl0002_coherence_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                string baseFa = Path.Combine(tempDir, "base", "ie_a.fa");
+                Directory.CreateDirectory(Path.GetDirectoryName(baseFa)!);
+                SyntheticGameArchiveBuilder.CreateRealisticIeAFa(baseFa);
+
+                int ifa0001 = Level5IdHelper.ComputeCrc32Utf8("ifa0001");
+                int iis0001 = Level5IdHelper.ComputeCrc32Utf8("iis0001");
+                int iie0001 = Level5IdHelper.ComputeCrc32Utf8("iie0001");
+                int evcSamguk = Level5IdHelper.ComputeCrc32Utf8("evc0001");
+                int npcSamguk = Level5IdHelper.ComputeCrc32Utf8("npc0001");
+                int npcTown = Level5IdHelper.ComputeCrc32Utf8("npc0500");
+
+                string fullFa = Path.Combine(tempDir, "full", "ie_a.fa");
+                Directory.CreateDirectory(Path.GetDirectoryName(fullFa)!);
+                using (var game = new SafeGOGame(baseFa, "es"))
+                {
+                    var root = game.IE_A.Directory;
+
+                    // 1. Populate ITEM_REF_BEGIN with Formation (ifa0001), Tactic (iis0001), and Emblem (iie0001)
+                    //    plus 3 coaches in ITEM_DIRECTOR_BEGIN so we verify SaveItems<ItemConfigDirector> NEVER wipes ITEM_REF!
+                    var itemCfg = new CfgBin<CfgTreeNode>();
+                    itemCfg.Open(game.GetFileContent("item_config"));
+                    var refBegin = itemCfg.Entries.FindByName("ITEM_REF_BEGIN");
+                    if (refBegin == null)
+                    {
+                        refBegin = new CfgTreeNode(new Entry("ITEM_REF_BEGIN", new List<Variable> { new Variable(CfgValueType.Int, 0) }));
+                        itemCfg.Entries.AddChild(refBegin);
+                        itemCfg.Entries.AddChild(new CfgTreeNode(new Entry("ITEM_REF_END")));
+                    }
+                    refBegin.Children.Add(new CfgTreeNode(new Entry("ITEM_REF", new List<Variable> { new Variable(CfgValueType.Int, ifa0001), new Variable(CfgValueType.Int, 19), new Variable(CfgValueType.Int, 0) })));
+                    refBegin.Children.Add(new CfgTreeNode(new Entry("ITEM_REF", new List<Variable> { new Variable(CfgValueType.Int, iis0001), new Variable(CfgValueType.Int, 23), new Variable(CfgValueType.Int, 1) })));
+                    refBegin.Children.Add(new CfgTreeNode(new Entry("ITEM_REF", new List<Variable> { new Variable(CfgValueType.Int, iie0001), new Variable(CfgValueType.Int, 22), new Variable(CfgValueType.Int, 2) })));
+                    refBegin.Item.Variables[0].Value = refBegin.Children.Count;
+
+                    var dirBegin = itemCfg.Entries.FindByName("ITEM_DIRECTOR_BEGIN");
+                    if (dirBegin == null)
+                    {
+                        dirBegin = new CfgTreeNode(new Entry("ITEM_DIRECTOR_BEGIN", new List<Variable> { new Variable(CfgValueType.Int, 3) }));
+                        itemCfg.Entries.AddChild(dirBegin);
+                        itemCfg.Entries.AddChild(new CfgTreeNode(new Entry("ITEM_DIRECTOR_END")));
+                    }
+                    dirBegin.Children.Clear();
+                    var coachDefs = new[]
+                    {
+                        (Code: "iim0001", Num: 1, Kick: 20, Speed: 0, Desc1: "Tiro +20"),
+                        (Code: "iim0002", Num: 2, Kick: 0, Speed: 25, Desc1: "Velocidad +25"),
+                        (Code: "iim0003", Num: 3, Kick: 15, Speed: 15, Desc1: "Equilibrio +15")
+                    };
+                    foreach (var cd in coachDefs)
+                    {
+                        var dObj = new GOSupport.ItemConfigDirector
+                        {
+                            ItemID = Level5IdHelper.ComputeCrc32Utf8(cd.Code),
+                            ItemNumber = cd.Num,
+                            NameID = Level5IdHelper.ComputeCrc32Utf8("nm_" + cd.Code),
+                            DescriptionID = Level5IdHelper.ComputeCrc32Utf8("ds_" + cd.Code),
+                            ItemCategory = 21,
+                            KickCompatible = cd.Kick,
+                            SpeedCompatible = cd.Speed
+                        };
+                        dirBegin.AddChild(new CfgTreeNode(new Entry("ITEM_DIRECTOR", CfgBinMapper.GetVariablesFromInstance(dObj))));
+                    }
+                    dirBegin.Item.Variables[0].Value = coachDefs.Length;
+                    Arc0SafeArchive.WriteFileAtPath(root, "/data/res/item/item_config.cfg.bin", itemCfg.Save());
+
+                    // 2. Build IEGO1 retail-authentic system_text_es.cfg.bin with TEXT_CONFIG_BEGIN + 3-param TEXT_INFO!
+                    var sysCfg = new CfgBin<CfgTreeNode> { Encoding = Encoding.UTF8 };
+                    var txtConfigBegin = new CfgTreeNode(new Entry("TEXT_CONFIG_BEGIN", new List<Variable> { new Variable(CfgValueType.Int, 1) }));
+                    txtConfigBegin.AddChild(new CfgTreeNode(new Entry("TEXT_CONFIG", new List<Variable> { new Variable(CfgValueType.Int, 100) })));
+                    sysCfg.Entries.AddChild(txtConfigBegin);
+                    sysCfg.Entries.AddChild(new CfgTreeNode(new Entry("TEXT_CONFIG_END")));
+
+                    var txtBegin = new CfgTreeNode(new Entry("TEXT_INFO_BEGIN", new List<Variable> { new Variable(CfgValueType.Int, 7) }));
+                    foreach (var cd in coachDefs)
+                    {
+                        txtBegin.AddChild(new CfgTreeNode(new Entry("TEXT_INFO", new List<Variable>
+                        {
+                            new Variable(CfgValueType.Int, Level5IdHelper.ComputeCrc32Utf8($"Dir-{cd.Num}-1")),
+                            new Variable(CfgValueType.Int, 0),
+                            new Variable(CfgValueType.String, cd.Desc1)
+                        })));
+                        txtBegin.AddChild(new CfgTreeNode(new Entry("TEXT_INFO", new List<Variable>
+                        {
+                            new Variable(CfgValueType.Int, Level5IdHelper.ComputeCrc32Utf8($"Dir-{cd.Num}-2")),
+                            new Variable(CfgValueType.Int, 0),
+                            new Variable(CfgValueType.String, "Sin penalización")
+                        })));
+                    }
+                    // Also include purpose_110 battle objective string!
+                    txtBegin.AddChild(new CfgTreeNode(new Entry("TEXT_INFO", new List<Variable>
+                    {
+                        new Variable(CfgValueType.Int, Level5IdHelper.ComputeCrc32Utf8("purpose_110")),
+                        new Variable(CfgValueType.Int, 0),
+                        new Variable(CfgValueType.String, "¡Juega contra los Caballeros Templarios!")
+                    })));
+                    sysCfg.Entries.AddChild(txtBegin);
+                    sysCfg.Entries.AddChild(new CfgTreeNode(new Entry("TEXT_INFO_END")));
+                    Arc0SafeArchive.WriteFileAtPath(root, "/data/res/text/system_text_es.cfg.bin", sysCfg.Save());
+
+                    // 3. Add heterogeneous (Body, Gender) characters including Samguk (cp0001, Body=1, Gender=1),
+                    //    Victor (cp0010, Body=1, Gender=1), Jude (cp0301, Body=1, Gender=1), Big Guy (cp0302, Body=2, Gender=1),
+                    //    Female Scout (cp0303, Body=1, Gender=2), and Manager Skie (cp0036, Body=7, Gender=2)
+                    var cbs = game.GetCharabase().ToList();
+                    AddCpCharacterAssets(root, cbs, modelNum: 1, body: 1, gender: 1, nameSeed: 1001);    // Samguk
+                    AddCpCharacterAssets(root, cbs, modelNum: 10, body: 1, gender: 1, nameSeed: 1010);   // Victor (kit 903!)
+                    AddCpCharacterAssets(root, cbs, modelNum: 301, body: 1, gender: 1, nameSeed: 1301);  // Jude Sharp
+                    AddCpCharacterAssets(root, cbs, modelNum: 302, body: 2, gender: 1, nameSeed: 1302);  // Big Body=2
+                    AddCpCharacterAssets(root, cbs, modelNum: 303, body: 1, gender: 2, nameSeed: 1303);  // Female Gender=2
+                    AddCpCharacterAssets(root, cbs, modelNum: 36, body: 7, gender: 2, nameSeed: 1036);   // Manager Skie
+                    AddCpCharacterAssets(root, cbs, modelNum: 304, body: 7, gender: 2, nameSeed: 1304);  // Female Body=7 donor
+                    AddCnOverworldAssets(root, cbs, modelNum: 1001, body: 1, gender: 1);
+                    AddCnOverworldAssets(root, cbs, modelNum: 1002, body: 1, gender: 1);
+                    game.SaveCharaBase(cbs.ToArray());
+
+                    var cps = game.GetCharaparams().ToList();
+                    foreach (int m in new[] { 301, 302, 303, 304 })
+                    {
+                        string pCode = $"para_cp{m:D4}";
+                        if (cps.All(x => x.ParamHash != Level5IdHelper.ComputeCrc32Utf8(pCode)))
+                        {
+                            cps.Add(new GOSupport.CharaParam
+                            {
+                                ParamHash = Level5IdHelper.ComputeCrc32Utf8(pCode),
+                                BaseHash = Level5IdHelper.ComputeCrc32Utf8($"cp{m:D4}"),
+                                PlayerPosition = 2,
+                                Element = 1,
+                                TP = 130,
+                                Kick = 70, Dribble = 70, Technique = 70, Block = 70, Speed = 70, Stamina = 70, Catch = 50, Luck = 70,
+                                SpecialMoveOffset = 0,
+                                SpecialMoveCount = 2
+                            });
+                        }
+                    }
+                    game.SaveCharaparams(cps.ToArray());
+
+                    // 4. Write map NPC file containing Samguk cutscene actor (evc0001, Type=1, HeadId=1),
+                    //    Samguk map actor (npc0001, Type=1, HeadId=1), and town pedestrian (npc0500, Type=3, HeadId=1001)
+                    var npcCfg = new CfgBin<CfgTreeNode> { Encoding = Encoding.UTF8 };
+                    var npcBegin = new CfgTreeNode(new Entry("NPC_BASE_BEGIN", new List<Variable> { new Variable(CfgValueType.Int, 3) }));
+                    npcBegin.AddChild(new CfgTreeNode(new Entry("NPC_BASE", new List<Variable>
+                    {
+                        new Variable(CfgValueType.Int, evcSamguk), new Variable(CfgValueType.Int, 1), new Variable(CfgValueType.Int, 1),
+                        new Variable(CfgValueType.Int, 1), new Variable(CfgValueType.Int, 1), new Variable(CfgValueType.Int, 0), new Variable(CfgValueType.Int, 1)
+                    })));
+                    npcBegin.AddChild(new CfgTreeNode(new Entry("NPC_BASE", new List<Variable>
+                    {
+                        new Variable(CfgValueType.Int, npcSamguk), new Variable(CfgValueType.Int, 1), new Variable(CfgValueType.Int, 1),
+                        new Variable(CfgValueType.Int, 1), new Variable(CfgValueType.Int, 1), new Variable(CfgValueType.Int, 0), new Variable(CfgValueType.Int, 1)
+                    })));
+                    npcBegin.AddChild(new CfgTreeNode(new Entry("NPC_BASE", new List<Variable>
+                    {
+                        new Variable(CfgValueType.Int, npcTown), new Variable(CfgValueType.Int, 1001), new Variable(CfgValueType.Int, 3),
+                        new Variable(CfgValueType.Int, 0), new Variable(CfgValueType.Int, 0), new Variable(CfgValueType.Int, 0), new Variable(CfgValueType.Int, 0)
+                    })));
+                    npcCfg.Entries.AddChild(npcBegin);
+                    npcCfg.Entries.AddChild(new CfgTreeNode(new Entry("NPC_BASE_END")));
+                    Arc0SafeArchive.WriteFileAtPath(root, "/data/map/m001a/m001a.npc.bin", npcCfg.Save());
+
+                    game.SaveCopyTo(fullFa);
+                }
+
+                // Execute with "Todo Activado" (SwapStoryPlayerVisualIdentities = true, RandomizeCoaches = true, RandomizeOverworldMapNpcs = true)
+                var fullOpts = new RandomizerOptions { Seed = "BTL0002-SAMGUK-2DS" };
+                fullOpts.Players.SwapStoryPlayerVisualIdentities = true;
+                fullOpts.Skills.RandomizeSkillParameters = true;
+                fullOpts.Teams.RandomizeLevels = true;
+                fullOpts.Rewards.RandomizeShopItems = true;
+
+                var coordinator = new RandomizerCoordinator();
+                var rep = coordinator.GenerateRun(fullFa, Path.Combine(tempDir, "out_full"), fullOpts);
+                Assert.True(rep.OutputIntegrityVerified);
+
+                using var outGame = new SafeGOGame(Path.Combine(tempDir, "out_full", "Standalone", "ie_a.fa"), "es");
+                var outRoot = outGame.IE_A.Directory;
+
+                // INVARIANT 1: ITEM_REF_BEGIN still preserves Formation (ifa0001), Tactic (iis0001), and Emblem (iie0001)!
+                var outItemCfg = new CfgBin<CfgTreeNode>();
+                outItemCfg.Open(outGame.GetFileContent("item_config"));
+                var outRefBegin = outItemCfg.Entries.FindByName("ITEM_REF_BEGIN");
+                Assert.NotNull(outRefBegin);
+                var refIds = new HashSet<int>(
+                    outRefBegin.Children.OfType<CfgTreeNode>()
+                        .Where(n => n.Item?.Name == "ITEM_REF" && n.Item.Variables.Count >= 1)
+                        .Select(n => Convert.ToInt32(n.Item.Variables[0].Value)));
+                Assert.True(refIds.Contains(ifa0001), "Formation ifa0001 MUST remain in ITEM_REF_BEGIN after coach randomization!");
+                Assert.True(refIds.Contains(iis0001), "Tactic iis0001 MUST remain in ITEM_REF_BEGIN after coach randomization!");
+                Assert.True(refIds.Contains(iie0001), "Emblem iie0001 MUST remain in ITEM_REF_BEGIN after coach randomization!");
+
+                // INVARIANT 2: system_text_es.cfg.bin preserves TEXT_CONFIG_BEGIN and 3-parameter IEGO1 TEXT_INFO (NEVER 4-param T2bþ variance=true!)
+                var outSysCfg = new CfgBin<CfgTreeNode>();
+                outSysCfg.Open(Arc0SafeArchive.TryReadFileFromPath(outRoot, "/data/res/text/system_text_es.cfg.bin"));
+                Assert.NotNull(outSysCfg.Entries.FindByName("TEXT_CONFIG_BEGIN"), "TEXT_CONFIG_BEGIN must be preserved in system_text_es.cfg.bin!");
+                var outTxtBegin = outSysCfg.Entries.FindByName("TEXT_INFO_BEGIN");
+                Assert.NotNull(outTxtBegin);
+                foreach (var ti in outTxtBegin.Children.OfType<CfgTreeNode>().Where(n => n.Item?.Name == "TEXT_INFO"))
+                {
+                    Assert.Equal(3, ti.Item.Variables.Count, "IEGO1 TEXT_INFO MUST keep exact 3-variable schema (never 4-variable IEGO2/3 variance=true)!");
+                }
+
+                // INVARIANT 3: Victor (cp0010) and Samguk (cp0001) keep exact (Body=1, Gender=1) rig so btl0002 kit 903 NEVER crashes!
+                var outCbByModel = outGame.GetCharabase().Where(c => c.CharaBaseType == 1).ToDictionary(c => c.ModelNumber);
+                Assert.Equal(1, outCbByModel[10].Body);
+                Assert.Equal(1, outCbByModel[10].Gender);
+                Assert.Equal(1, outCbByModel[1].Body);
+                Assert.Equal(1, outCbByModel[1].Gender);
+                Assert.Equal(2, outCbByModel[302].Body);   // Big guy stayed Body=2
+                Assert.Equal(2, outCbByModel[303].Gender); // Female scout stayed Gender=2
+
+                // INVARIANT 4: Samguk's cutscene actor (evc0001) and map actor (npc0001) keep HeadId == 1 (cp0001),
+                // so Samguk has the EXACT SAME appearance in 3D cutscenes, overworld map, portraits, and matches!
+                var outNpcs = MapDataService.LoadAllMapNpcBases(outRoot);
+                var outEvcSamguk = outNpcs.First(n => n.Record.NpcId == evcSamguk);
+                var outMapSamguk = outNpcs.First(n => n.Record.NpcId == npcSamguk);
+                var outTownNpc = outNpcs.First(n => n.Record.NpcId == npcTown);
+                Assert.Equal(1, outEvcSamguk.Record.HeadId);
+                Assert.Equal(1, outMapSamguk.Record.HeadId);
+                Assert.Equal(1002, outTownNpc.Record.HeadId);
+            }
+            finally
+            {
+                try { Directory.Delete(tempDir, recursive: true); } catch { }
+            }
+        }
     }
 }

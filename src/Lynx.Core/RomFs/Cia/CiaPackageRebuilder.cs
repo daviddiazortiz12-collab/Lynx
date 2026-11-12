@@ -131,7 +131,10 @@ namespace Lynx.Core.RomFs.Cia
                 Directory.CreateDirectory(outDir);
 
             // Pre-flight disk space check on output volume so multi-GB writes never fail half-way with opaque IOException
-            EnsureSufficientDiskSpaceIfKnown(outDir ?? fullOutput, inspection.FileSizeBytes + (64L * 1024 * 1024), "guardar el nuevo archivo .cia");
+            long estimatedOutBytes = buildOptions?.DeduplicateOtherLanguageStreamsToSpanish == true
+                ? Math.Min(inspection.FileSizeBytes, 2_000_000_000L)
+                : inspection.FileSizeBytes;
+            EnsureSufficientDiskSpaceIfKnown(outDir ?? fullOutput, estimatedOutBytes + (64L * 1024 * 1024), "guardar el nuevo archivo .cia");
 
             string tempPartPath = $"{fullOutput}.part.{Guid.NewGuid():N}";
             var expectedOverlaySizes = new Dictionary<string, long>(StringComparer.Ordinal);
@@ -276,6 +279,11 @@ namespace Lynx.Core.RomFs.Cia
                                             WriteContentTo = target => CopyDiskFile(diskPath, target)
                                         };
                                     }
+                                }
+
+                                if (buildOptions?.DeduplicateOtherLanguageStreamsToSpanish == true)
+                                {
+                                    ApplySpanishMediaDeduplicationAliases(mergedSpecs, expectedOverlaySizes);
                                 }
 
                                 var allDirs = origInventory.Directories
@@ -854,6 +862,62 @@ namespace Lynx.Core.RomFs.Cia
                 rem -= r;
             }
             return sha.GetHashAndReset();
+        }
+
+        private static readonly string[] NonSpanishMediaLangSuffixes = { "_de", "_en", "_fr", "_it" };
+
+        private static void ApplySpanishMediaDeduplicationAliases(
+            Dictionary<string, RomFsBuildFileSpec> mergedSpecs,
+            IReadOnlyDictionary<string, long> expectedOverlaySizes)
+        {
+            var keys = mergedSpecs.Keys.ToList();
+            foreach (string key in keys)
+            {
+                if (expectedOverlaySizes != null && expectedOverlaySizes.ContainsKey(key))
+                    continue;
+
+                if (!key.StartsWith("movie/", StringComparison.OrdinalIgnoreCase) &&
+                    !key.StartsWith("snd/", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string ext = Path.GetExtension(key);
+                if (!ext.Equals(".bcstm", StringComparison.OrdinalIgnoreCase) &&
+                    !ext.Equals(".moflex", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string withoutExt = key.Substring(0, key.Length - ext.Length);
+                string matchedSuffix = null;
+                foreach (string suffix in NonSpanishMediaLangSuffixes)
+                {
+                    if (withoutExt.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        matchedSuffix = suffix;
+                        break;
+                    }
+                }
+
+                if (matchedSuffix == null)
+                    continue;
+
+                string esCandidate = withoutExt.Substring(0, withoutExt.Length - matchedSuffix.Length) + "_es" + ext;
+                if (!mergedSpecs.TryGetValue(esCandidate, out var esSpec) ||
+                    !string.IsNullOrEmpty(esSpec.AliasOfRelativePath))
+                {
+                    continue;
+                }
+
+                var origSpec = mergedSpecs[key];
+                mergedSpecs[key] = new RomFsBuildFileSpec
+                {
+                    RelativePath = origSpec.RelativePath,
+                    Length = esSpec.Length,
+                    AliasOfRelativePath = esSpec.RelativePath
+                };
+            }
         }
 
         private static void TryDeleteTempFile(string path)

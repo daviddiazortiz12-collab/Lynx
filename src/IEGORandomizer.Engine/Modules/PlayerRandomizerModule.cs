@@ -649,6 +649,8 @@ namespace IEGORandomizer.Engine.Modules
             idProp.SetValue(card, newPrereq);
         }
 
+        private static readonly HashSet<int> ReservedManagerModelNumbers = new() { 36, 37, 38, 44 };
+
         private static void SwapVisualAssetsAtomically(
             SafeGOGame game,
             DeterministicRng rng,
@@ -659,7 +661,11 @@ namespace IEGORandomizer.Engine.Modules
             var coherentBases = charaBases
                 .Where(b => visualProfile.CoherentPlayableBaseHashes.Contains(b.BaseHash) &&
                             b.ModelNumber > 0 &&
-                            b.ModelNumber < VisualCoherenceValidator.MaxEngineModelNumberExclusive)
+                            b.ModelNumber < VisualCoherenceValidator.MaxEngineModelNumberExclusive &&
+                            b.Body > 0 &&
+                            b.Gender > 0 &&
+                            !ReservedManagerModelNumbers.Contains(b.ModelNumber))
+                .OrderBy(b => b.ModelNumber)
                 .ToList();
 
             if (coherentBases.Count < 2)
@@ -672,58 +678,65 @@ namespace IEGORandomizer.Engine.Modules
             if (!hasAllDirs)
                 return;
 
-            // Snapshot complete visual tuples + binary files so swaps are 100% atomic
-            var snapshots = new List<(
-                int NameHash, int NicknameHash, int DescHash, int Body, int Gender, int Skin, int Year,
-                byte[] Bustup, byte[] RpgModel, byte[] WazaModel)>();
-
-            var validSwapTargets = new List<ICharabase>();
-            foreach (var cb in coherentBases)
+            // Partition strictly by exact (Body, Gender) rig so bespoke story kits (e.g. cp0010 kit 903 in btl0002)
+            // and cutscene/match skeleton animations always match valid 3D body meshes!
+            foreach (var rigGroup in coherentBases
+                         .GroupBy(cb => (cb.Body, cb.Gender))
+                         .OrderBy(g => g.Key.Body)
+                         .ThenBy(g => g.Key.Gender))
             {
-                string cpCode = $"cp{cb.ModelNumber:D4}";
-                string pBust = $"/data/bustup/face/{cpCode}a.xi";
-                string pRpg = $"/data/chr/model/rpg/face/{cpCode}m.xc";
-                string pWaza = $"/data/chr/model/waza/face/{cpCode}a.xc";
+                var snapshots = new List<(
+                    int NameHash, int NicknameHash, int DescHash, int Body, int Gender, int Skin, int Year,
+                    byte[] Bustup, byte[] RpgModel, byte[] WazaModel)>();
 
-                byte[] bustBytes = Arc0SafeArchive.TryReadFileFromPath(root, pBust);
-                byte[] rpgBytes = Arc0SafeArchive.TryReadFileFromPath(root, pRpg);
-                byte[] wazaBytes = Arc0SafeArchive.TryReadFileFromPath(root, pWaza);
-                if (bustBytes == null || rpgBytes == null || wazaBytes == null)
+                var validSwapTargets = new List<ICharabase>();
+                foreach (var cb in rigGroup)
+                {
+                    string cpCode = $"cp{cb.ModelNumber:D4}";
+                    string pBust = $"/data/bustup/face/{cpCode}a.xi";
+                    string pRpg = $"/data/chr/model/rpg/face/{cpCode}m.xc";
+                    string pWaza = $"/data/chr/model/waza/face/{cpCode}a.xc";
+
+                    byte[] bustBytes = Arc0SafeArchive.TryReadFileFromPath(root, pBust);
+                    byte[] rpgBytes = Arc0SafeArchive.TryReadFileFromPath(root, pRpg);
+                    byte[] wazaBytes = Arc0SafeArchive.TryReadFileFromPath(root, pWaza);
+                    if (bustBytes == null || rpgBytes == null || wazaBytes == null)
+                        continue;
+
+                    validSwapTargets.Add(cb);
+                    snapshots.Add((
+                        cb.NameHash, cb.NicknameHash, cb.DescriptionHash, cb.Body, cb.Gender, cb.Skin, cb.Year,
+                        bustBytes,
+                        rpgBytes,
+                        wazaBytes));
+                }
+
+                if (validSwapTargets.Count < 2)
                     continue;
 
-                validSwapTargets.Add(cb);
-                snapshots.Add((
-                    cb.NameHash, cb.NicknameHash, cb.DescriptionHash, cb.Body, cb.Gender, cb.Skin, cb.Year,
-                    bustBytes,
-                    rpgBytes,
-                    wazaBytes));
-            }
+                var indices = Enumerable.Range(0, validSwapTargets.Count).ToList();
+                var derangedIndices = rng.CreateDerangement(indices);
 
-            if (validSwapTargets.Count < 2)
-                return;
+                for (int i = 0; i < validSwapTargets.Count; i++)
+                {
+                    var target = validSwapTargets[i];
+                    var donor = snapshots[derangedIndices[i]];
+                    string cpCode = $"cp{target.ModelNumber:D4}";
 
-            var indices = Enumerable.Range(0, validSwapTargets.Count).ToList();
-            var derangedIndices = rng.CreateDerangement(indices);
+                    // Keep BaseHash, ModelNumber (< 2048!), Body, and Gender invariant while atomically transferring
+                    // skin tone, year, name hashes, 2D portrait, RPG overworld/cutscene head, and Waza match head!
+                    target.NameHash = donor.NameHash;
+                    target.NicknameHash = donor.NicknameHash;
+                    target.DescriptionHash = donor.DescHash;
+                    target.Body = donor.Body;
+                    target.Gender = donor.Gender;
+                    target.Skin = donor.Skin;
+                    target.Year = donor.Year;
 
-            for (int i = 0; i < validSwapTargets.Count; i++)
-            {
-                var target = validSwapTargets[i];
-                var donor = snapshots[derangedIndices[i]];
-                string cpCode = $"cp{target.ModelNumber:D4}";
-
-                // Keep BaseHash and ModelNumber unchanged (< 2048!) while atomically transferring
-                // body rig, skin tone, gender, name hashes, 2D portrait, RPG head, and Waza match head!
-                target.NameHash = donor.NameHash;
-                target.NicknameHash = donor.NicknameHash;
-                target.DescriptionHash = donor.DescHash;
-                target.Body = donor.Body;
-                target.Gender = donor.Gender;
-                target.Skin = donor.Skin;
-                target.Year = donor.Year;
-
-                Arc0SafeArchive.WriteFileAtPath(root, $"/data/bustup/face/{cpCode}a.xi", donor.Bustup);
-                Arc0SafeArchive.WriteFileAtPath(root, $"/data/chr/model/rpg/face/{cpCode}m.xc", donor.RpgModel);
-                Arc0SafeArchive.WriteFileAtPath(root, $"/data/chr/model/waza/face/{cpCode}a.xc", donor.WazaModel);
+                    Arc0SafeArchive.WriteFileAtPath(root, $"/data/bustup/face/{cpCode}a.xi", donor.Bustup);
+                    Arc0SafeArchive.WriteFileAtPath(root, $"/data/chr/model/rpg/face/{cpCode}m.xc", donor.RpgModel);
+                    Arc0SafeArchive.WriteFileAtPath(root, $"/data/chr/model/waza/face/{cpCode}a.xc", donor.WazaModel);
+                }
             }
         }
 

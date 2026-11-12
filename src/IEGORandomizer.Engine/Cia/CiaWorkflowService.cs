@@ -503,7 +503,8 @@ namespace IEGORandomizer.Engine.Cia
             return new CiaBuildOptions
             {
                 BumpVersionForFbiUpdate = ciaOpts.BumpTitleVersionForFbiUpdate,
-                TargetTitleVersionRaw = explicitVer
+                TargetTitleVersionRaw = explicitVer,
+                DeduplicateOtherLanguageStreamsToSpanish = ciaOpts.DeduplicateOtherLanguageStreamsToSpanish
             };
         }
 

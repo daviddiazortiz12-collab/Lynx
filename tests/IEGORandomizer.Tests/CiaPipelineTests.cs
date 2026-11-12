@@ -1186,6 +1186,88 @@ namespace IEGORandomizer.Tests
             IvfcRomFsReader.ExtractAllToDirectory(romfsSlice, targetDir);
         }
 
+        [Fact]
+        public void SpanishMediaDeduplication_AliasesNonSpanishStreamsInIvfcLevel3_PassesCold2dsVerifierAndShrinksCia()
+        {
+            string tempDir = CreateTempTestDir("cia_dedup_es");
+            try
+            {
+                string baseCia = Path.Combine(tempDir, "Luz_Multi5.cia");
+                BuildSyntheticLuzV000MultiContentCia(baseCia, out _);
+
+                // Overlay 5 localized 32 KB .bcstm streams + 5 localized 32 KB .moflex streams into a multi-5 source .cia
+                string multi5OverlayDir = Path.Combine(tempDir, "multi5_romfs");
+                Directory.CreateDirectory(Path.Combine(multi5OverlayDir, "snd", "product", "stream"));
+                Directory.CreateDirectory(Path.Combine(multi5OverlayDir, "movie"));
+
+                byte[] esAudio = Encoding.ASCII.GetBytes("ES_AUDIO_HEADER_").Concat(Enumerable.Repeat((byte)0x53, 32768)).ToArray();
+                byte[] esMovie = Encoding.ASCII.GetBytes("ES_MOVIE_HEADER_").Concat(Enumerable.Repeat((byte)0x4D, 32768)).ToArray();
+
+                foreach (string lang in new[] { "de", "en", "es", "fr", "it" })
+                {
+                    byte[] audioPayload = lang == "es"
+                        ? esAudio
+                        : Encoding.ASCII.GetBytes(lang.ToUpperInvariant() + "_AUDIO_HEADER_").Concat(Enumerable.Repeat((byte)(lang[0]), 32768)).ToArray();
+                    byte[] moviePayload = lang == "es"
+                        ? esMovie
+                        : Encoding.ASCII.GetBytes(lang.ToUpperInvariant() + "_MOVIE_HEADER_").Concat(Enumerable.Repeat((byte)(lang[1]), 32768)).ToArray();
+
+                    File.WriteAllBytes(Path.Combine(multi5OverlayDir, "snd", "product", "stream", $"a4m01a_{lang}.bcstm"), audioPayload);
+                    File.WriteAllBytes(Path.Combine(multi5OverlayDir, "movie", $"scene04_{lang}.moflex"), moviePayload);
+                }
+
+                string multi5SourceCia = Path.Combine(tempDir, "Luz_Multi5_Full.cia");
+                CiaPackageRebuilder.RebuildFromRomFsDirectoryOverlay(
+                    baseCia,
+                    multi5OverlayDir,
+                    multi5SourceCia,
+                    buildOptions: new CiaBuildOptions { BumpVersionForFbiUpdate = false });
+
+                long fullSize = new FileInfo(multi5SourceCia).Length;
+
+                // Now randomize with DeduplicateOtherLanguageStreamsToSpanish = true (CLI --dedup-es)
+                string dedupCia = Path.Combine(tempDir, "Luz_UpdatePatch_v1.2.3_2DS.cia");
+                int cliExit = CliRunner.Run(new[]
+                {
+                    "--cli",
+                    "--input", multi5SourceCia,
+                    "--output-cia", dedupCia,
+                    "--preset", "full",
+                    "--seed", "DEDUP-2DS-ES",
+                    "--dedup-es"
+                });
+                Assert.Equal(0, cliExit);
+
+                long dedupSize = new FileInfo(dedupCia).Length;
+                // Saved at least 8 * 32 KB = 256 KB of duplicated non-Spanish streams!
+                Assert.True(dedupSize <= fullSize - (220 * 1024),
+                    $"Expected deduplicated .cia ({dedupSize} B) to be >= 220 KB smaller than multi-5 .cia ({fullSize} B).");
+
+                var coldVerify = CiaPackageVerifier.VerifyColdCiaFile(
+                    dedupCia,
+                    expectedTitleIdHex: "0004000000112F00",
+                    expectedSaveDataSize: LuzSaveDataSize,
+                    minimumExpectedRomFsFileCount: 15,
+                    expectedTitleVersionRaw: CiaConstants.DefaultFbiUpdateTitleVersionRaw);
+                Assert.True(coldVerify.IsValid, string.Join(" | ", coldVerify.Errors));
+
+                // Extract full RomFS and verify all 5 language files exist and return valid Spanish media bytes!
+                string extractedDir = Path.Combine(tempDir, "extracted_romfs");
+                ExtractFullRomFsFromPlainCia(dedupCia, extractedDir);
+                foreach (string lang in new[] { "de", "en", "es", "fr", "it" })
+                {
+                    byte[] gotAudio = File.ReadAllBytes(Path.Combine(extractedDir, "snd", "product", "stream", $"a4m01a_{lang}.bcstm"));
+                    byte[] gotMovie = File.ReadAllBytes(Path.Combine(extractedDir, "movie", $"scene04_{lang}.moflex"));
+                    Assert.SequenceEqual(esAudio, gotAudio);
+                    Assert.SequenceEqual(esMovie, gotMovie);
+                }
+            }
+            finally
+            {
+                TryCleanup(tempDir);
+            }
+        }
+
         private static string CreateTempTestDir(string prefix)
         {
             string dir = Path.Combine(Path.GetTempPath(), $"iego_test_{prefix}_{Guid.NewGuid():N}");
