@@ -515,5 +515,117 @@ namespace Lynx.Core.Maps
             };
             return true;
         }
+
+        public static List<MapNpcBaseEntry> LoadAllMapNpcBases(VirtualDirectory archiveRoot)
+        {
+            var results = new List<MapNpcBaseEntry>();
+            if (archiveRoot == null || !archiveRoot.IsFolderExists("/data/map"))
+                return results;
+
+            VirtualDirectory mapRoot = archiveRoot.GetFolderFromFullPath("/data/map");
+            foreach (VirtualDirectory mapFolder in mapRoot.Folders.OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                foreach (var kvp in mapFolder.Files.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+                {
+                    string fileName = kvp.Key;
+                    if (!fileName.EndsWith(".npc.bin", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    string fullVirtualPath = $"/data/map/{mapFolder.Name}/{fileName}";
+                    byte[] bytes = Arc0SafeArchive.TryReadFileFromPath(mapFolder, fileName);
+                    if (bytes == null || bytes.Length < 16)
+                        continue;
+
+                    if (!TryOpenCfgTree(bytes, out CfgBin<CfgTreeNode> cfg))
+                        continue;
+
+                    var npcNodes = FindEntriesByPrefix(cfg.Entries, "NPC_BASE");
+                    for (int idx = 0; idx < npcNodes.Count; idx++)
+                    {
+                        var node = npcNodes[idx];
+                        if (TryReadNpcBaseRecord(node, out MapNpcBaseRecord rec))
+                        {
+                            results.Add(new MapNpcBaseEntry
+                            {
+                                MapId = mapFolder.Name,
+                                VirtualFilePath = fullVirtualPath,
+                                EntryName = node.Item.Name,
+                                NodeIndex = idx,
+                                Record = rec
+                            });
+                        }
+                    }
+                }
+            }
+
+            return results;
+        }
+
+        public static void SaveMapNpcBases(VirtualDirectory archiveRoot, IEnumerable<MapNpcBaseEntry> modifiedNpcs)
+        {
+            if (archiveRoot == null || modifiedNpcs == null)
+                return;
+
+            foreach (var byFile in modifiedNpcs.GroupBy(n => n.VirtualFilePath, StringComparer.Ordinal))
+            {
+                byte[] existing = Arc0SafeArchive.TryReadFileFromPath(archiveRoot, byFile.Key);
+                if (existing == null)
+                    continue;
+
+                var cfg = new CfgBin<CfgTreeNode>();
+                cfg.Open(existing);
+
+                var npcNodes = FindEntriesByPrefix(cfg.Entries, "NPC_BASE");
+                foreach (MapNpcBaseEntry entry in byFile)
+                {
+                    if (entry.NodeIndex < 0 || entry.NodeIndex >= npcNodes.Count)
+                        continue;
+
+                    var vars = npcNodes[entry.NodeIndex].Item.Variables;
+                    if (vars.Count >= 7)
+                    {
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[1], entry.Record.HeadId);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[2], entry.Record.Type);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[3], entry.Record.UniformId);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[4], entry.Record.BootsId);
+                        Level5CfgValueParser.UpdateHashOrIntVariableInPlace(vars[5], entry.Record.GlovesId);
+                    }
+                }
+
+                byte[] updated = cfg.Save();
+                Arc0SafeArchive.WriteFileAtPath(archiveRoot, byFile.Key, updated);
+            }
+        }
+
+        private static bool TryReadNpcBaseRecord(CfgTreeNode node, out MapNpcBaseRecord record)
+        {
+            record = null;
+            var vars = node?.Item?.Variables;
+            if (vars == null || vars.Count < 7)
+                return false;
+
+            if (!Level5CfgValueParser.TryReadHashOrId(vars[0], out int npcId, out _) ||
+                !Level5CfgValueParser.TryReadInt32(vars[1], out int headId) ||
+                !Level5CfgValueParser.TryReadInt32(vars[2], out int type) ||
+                !Level5CfgValueParser.TryReadInt32(vars[3], out int uniformId) ||
+                !Level5CfgValueParser.TryReadInt32(vars[4], out int bootsId) ||
+                !Level5CfgValueParser.TryReadInt32(vars[5], out int glovesId) ||
+                !Level5CfgValueParser.TryReadInt32(vars[6], out int iconId))
+            {
+                return false;
+            }
+
+            record = new MapNpcBaseRecord
+            {
+                NpcId = npcId,
+                HeadId = headId,
+                Type = type,
+                UniformId = uniformId,
+                BootsId = bootsId,
+                GlovesId = glovesId,
+                IconId = iconId
+            };
+            return true;
+        }
     }
 }

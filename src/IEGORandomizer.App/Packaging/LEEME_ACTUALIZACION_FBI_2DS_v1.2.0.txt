@@ -1,0 +1,65 @@
+================================================================================
+  IEGO RANDOMIZER v1.2.0 — GUÍA RÁPIDA DE ACTUALIZACIÓN FBI EN NINTENDO 2DS/3DS
+================================================================================
+
+¿QUÉ NOVEDADES Y CORRECCIONES TRAE v1.2.0?
+-------------------------------------------
+1. ARREGLO DEFINITIVO DEL DUELO CONTRA VICTOR BLADE (Cap. 1, btl0302) Y PARTIDOS DE HISTORIA:
+   - Protegidos los duelos 1v1/2v2/3v3 de historia (btl0300..btl0399), sus formaciones
+     especiales (ifb0300..ifb0399) y trajes de cinemática (Uniform >= 900000 como 903000).
+   - Preservada la animación esquelética 1-a-1 (vkaNNNN_ckNNNN.xc) de todos los Espíritus
+     Guerreros (evitando el crash al invocar a Maestro ck0002 tras pasar a Victor) y mantenido
+     Arion/JP en FightingSpiritHash = 0 hasta su despertar canónico en historia.
+
+2. ARREGLO DEL 100% DE LAS PACHANGAS RESTANTES:
+   - Eliminada la contaminación de formaciones de duelo 1v1/2v2 (ifb03XX) en el pool de
+     pachangas 5v5 (ahora usa exclusivamente las formaciones 5v5 reales ifb0101..ifb0111).
+   - Verificado que toda equipación asignada a pachangas en mapa exista también en ITEM_UNIFORM
+     (iiuXXXX) y respetado el mismo esqueleto corporal en pachangas con uniforme escolar/calle.
+
+3. 1 TÉCNICA ACTIVA INICIAL O ESPÍRITU GUERRERO GARANTIZADO EN TODOS LOS JUGADORES:
+   - Arion (protagonista, para_cp0008) y JP (para_cp0005) llevan SIEMPRE 100% garantizada
+     1 supertécnica activa a Nivel 1 con PT suficientes desde el minuto 0 (conservando además
+     sus ranuras de despertar por historia).
+   - Todos los demás jugadores jugables tienen garantizada al menos 1 técnica activa a Nivel 1
+     o 1 Espíritu Guerrero inicial jugable.
+
+4. INTERCAMBIO DINÁMICO DE TÉCNICAS DE HISTORIA EN SCRIPTS (.nutb):
+   - Ningún jugador del Raimon ni de la historia se queda ya con técnicas vanilla congeladas:
+     todos reciben movesets 100% randomizados.
+   - El motor parchea automáticamente el bytecode Squirrel (.nutb) en desbloqueos de historia
+     (RunUnlockSkill / CMND_SKILL_UNLOCK) e inyecta aprendizaje temporal en combate
+     (CMND_BTL_LEARNING_SKILL antes de CMND_BTL_USE_SKILL) sin romper cinemáticas RunSkillScript.
+
+5. RANDOMIZACIÓN DE ENTRENADORES, GERENTES Y NPCs:
+   - Entrenadores (perfiles de mejora + descripciones en español Dir-N-1/2 + reclutamiento).
+   - Gerentes del Raimon (Skie, Jade, Rosie y Celia con retrato y modelo 3D compatible).
+   - NPCs humanos que intervienen en la historia y NPCs del mapa (.npc.bin), protegiendo
+     animales/props (Type 4) y esqueletos especiales de cinemática.
+
+================================================================================
+  CÓMO GENERAR E INSTALAR LA ACTUALIZACIÓN FBI EN TU NINTENDO 2DS (1 CLIC)
+================================================================================
+
+OPCIÓN A — AUTOMÁTICA EN 1 CLIC (Misma semilla TITAN-C45C-614C):
+  1. Haz doble clic en:
+       Generar_Actualizacion_FBI_2DS_TITAN-C45C-614C.bat
+     (o arrastra tu archivo .cia original de Inazuma Eleven GO Luz encima de él).
+  2. Selecciona tu archivo .cia original cuando se abra la ventana de Windows.
+  3. Se creará automáticamente la carpeta "Actualizacion_FBI_v1.2.0" con el archivo:
+       *_Actualizacion_FBI_v1.2.0_TITAN-C45C-614C.cia
+     (con TitleID 0004000000112F00 y versión TMD V.1.2.0 = 1056, superior a V.1.1.2 = 1042).
+
+OPCIÓN B — INTERFAZ GRÁFICA COMPLETA (Para personalizar opciones o semilla):
+  1. Abre IEGORandomizer.exe (se abre la ventana de la aplicación).
+  2. En "Modo 1: .cia -> Nuevo .cia", elige tu .cia original y deja activado
+     "Modo Actualización FBI en 2DS/3DS (V.1.2.0)".
+  3. Pulsa "Randomizar .cia y Generar Nuevo .cia Verificado".
+
+INSTALACIÓN EN TU NINTENDO 2DS CON FBI:
+  1. Copia el nuevo archivo .cia generado a la carpeta /cias/ de la tarjeta SD de tu 2DS.
+  2. En tu 2DS abre FBI -> SD -> cias -> selecciona el .cia -> "Install CIA" (o "Install and delete CIA").
+  3. FBI reconocerá automáticamente la versión superior V.1.2.0 sobre tu juego instalado y lo
+     actualizará directamente encima sin borrar tu archivo de guardado (00000001.sav).
+     (Nota: Si quieres que Arion y el Raimon carguen en tu partida las nuevas técnicas Nv.1
+     desde el principio, inicia "Partida Nueva" dentro del juego).

@@ -43,6 +43,28 @@ namespace IEGORandomizer.Engine.Modules
                 ? visualProfile.ValidGoalkeeperKitNumbers.OrderBy(k => k).ToList()
                 : validBaseKits;
 
+            // Build set of kit numbers registered as actual ITEM_UNIFORM ("iiuXXXX") items in item_config.cfg.bin:
+            // Overworld ENCOUNT_INFO.Uniform stores CRC32("iiuXXXX"), so assigning a body number that lacks an
+            // ITEM_UNIFORM entry causes a null item lookup crash when spawning the pachanga on the map!
+            var registeredUniformItems = game.GetItems("uniform") ?? Array.Empty<IItemConfig>();
+            var iiuLookup = Level5IdHelper.BuildPrefixLookup("iiu");
+            var registeredIiuKitNums = new HashSet<int>();
+            foreach (var uItem in registeredUniformItems)
+            {
+                if (uItem.ItemID != 0 && iiuLookup.TryGetValue(uItem.ItemID, out string code) &&
+                    int.TryParse(code.AsSpan(3), out int uNum) &&
+                    uNum > 0 && uNum < VisualCoherenceValidator.MaxStandardSoccerKitNumberExclusive)
+                {
+                    registeredIiuKitNums.Add(uNum);
+                }
+            }
+
+            var validPachangaKits = registeredIiuKitNums.Count > 0
+                ? validCompleteKits.Where(k => registeredIiuKitNums.Contains(k)).ToList()
+                : validCompleteKits;
+            if (validPachangaKits.Count == 0)
+                validPachangaKits = validCompleteKits;
+
             if (!options.RandomizeRivalUniforms && !options.RandomizePachangaUniforms)
                 return;
 
@@ -64,8 +86,9 @@ namespace IEGORandomizer.Engine.Modules
                 if (tp.TeamParamID == 0)
                     continue;
 
-                // CRITICAL: Never overwrite Uniform == 0 (Episode 1 street-clothes / school-uniform pachangas)!
-                if (tp.Uniform <= 0)
+                // CRITICAL: Never overwrite Uniform <= 0 (Episode 1 street-clothes / school-uniform pachangas)
+                // OR Uniform >= 900000 (special story outfits such as 903000 Black Knights hoodie in btl0302/btl0002)!
+                if (tp.Uniform <= 0 || tp.Uniform >= (VisualCoherenceValidator.MaxStandardSoccerKitNumberExclusive * 1000))
                     continue;
 
                 bool isPachanga = TeamRandomizerModule.IsMiniBattleTeamParam(
@@ -89,7 +112,8 @@ namespace IEGORandomizer.Engine.Modules
                 }
 
                 int currentKitNum = tp.Uniform / 1000;
-                int chosenKitNum = ChooseDifferentKit(validCompleteKits, currentKitNum, kitRng);
+                var candidatePool = isPachanga ? validPachangaKits : validCompleteKits;
+                int chosenKitNum = ChooseDifferentKit(candidatePool, currentKitNum, kitRng);
 
                 bool canUseAway = visualProfile.ValidAwayGoalkeeperKitNumbers.Contains(chosenKitNum) ||
                                   (visualProfile.ValidGoalkeeperKitNumbers.Count == 0 && visualProfile.ValidAwayKitNumbers.Contains(chosenKitNum));

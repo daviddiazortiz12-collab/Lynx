@@ -4,18 +4,22 @@ using System.Linq;
 using IEGORandomizer.Engine.Configuration;
 using IEGORandomizer.Engine.Protection;
 using IEGORandomizer.Engine.Seeding;
+using IEGORandomizer.Engine.Validation;
 using Lynx.Core.Games;
 using Lynx.Core.RomFs;
+using Lynx.Core.Scripts;
 using Lynx.InazumaEleven.Logic;
 
 namespace IEGORandomizer.Engine.Modules
 {
     /// <summary>
     /// Subsystem B: Randomizes initial skills, level-up learnsets (<c>skill_table.cfg.bin</c>),
-    /// passive talents, Fighting Spirit skills (<c>IAvatar.SpecialMoveID</c> &amp; <c>SkillID</c>),
-    /// and optional skill parameters (<c>TPCost</c>, <c>Power</c>, <c>Element</c>).
-    /// Enforces player/avatar skill-domain separation, role compatibility, script-forced skill safety,
-    /// and guaranteed Level-1 TP usability.
+    /// passive talents, Fighting Spirit passives (<c>IAvatar.SkillID</c>, strictly preserving
+    /// <c>IAvatar.SpecialMoveID</c> 1-to-1 skeletal motion <c>vkaNNNN_ckNNNN.xc</c>),
+    /// optional skill parameters (<c>TPCost</c>, <c>Power</c>, <c>Element</c>),
+    /// guaranteed Level-1 starter technique or initial Fighting Spirit for every playable character
+    /// (<c>100%</c> guaranteed Level-1 active move for Arion <c>para_cp0008</c> and JP <c>para_cp0005</c>),
+    /// and Dynamic Story-Technique Swap mappings for Squirrel <c>.nutb</c> event &amp; battle scripts.
     /// </summary>
     public static class SkillRandomizerModule
     {
@@ -24,6 +28,7 @@ namespace IEGORandomizer.Engine.Modules
             SeedEngine seeds,
             SkillsRandomizerOptions options,
             StoryProtectionContext protection,
+            VisualCoherenceProfile visualProfile,
             RandomizationExecutionReport report)
         {
             if (options == null || !options.Enabled)
@@ -37,17 +42,33 @@ namespace IEGORandomizer.Engine.Modules
             if (skills.Length == 0)
                 return;
 
-            // Precompute canonical Level-5 CRC32 sets for genuine IEGO1 player & Fighting Spirit skills:
+            // Precompute canonical Level-5 CRC32 lookups for genuine IEGO1 player & Fighting Spirit skills:
             // Player active skills: whsXXXX (Shoot), whoXXXX (Dribble), whdXXXX (Block), whkXXXX (Save) [0001..8999]
             // Player passive talents: whpXXXX [0001..8999] (retail SkillPosition == 15; synthetic test == 5)
             // Fighting Spirit skills: wksXXXX (Shoot), wkoXXXX (Dribble), wkdXXXX (Block), wkkXXXX (Save), wkpXXXX (Passive)
-            // Limiting to 0001..8999 automatically excludes wh*9999 Ultimate Evolution Manuals AND all 25+ non-wh*
-            // Void/Totem/internal dummy entries in retail skill_config.cfg.bin that lack player battle animations!
-            var whsSet = BuildRangeHashSet("whs", 1, 8999);
-            var whoSet = BuildRangeHashSet("who", 1, 8999);
-            var whdSet = BuildRangeHashSet("whd", 1, 8999);
-            var whkSet = BuildRangeHashSet("whk", 1, 8999);
-            var whpSet = BuildRangeHashSet("whp", 1, 8999);
+            var whsLookup = BuildRangeCodeLookup("whs", 1, 8999);
+            var whoLookup = BuildRangeCodeLookup("who", 1, 8999);
+            var whdLookup = BuildRangeCodeLookup("whd", 1, 8999);
+            var whkLookup = BuildRangeCodeLookup("whk", 1, 8999);
+            var whpLookup = BuildRangeCodeLookup("whp", 1, 8999);
+
+            var whsSet = new HashSet<int>(whsLookup.Keys);
+            var whoSet = new HashSet<int>(whoLookup.Keys);
+            var whdSet = new HashSet<int>(whdLookup.Keys);
+            var whkSet = new HashSet<int>(whkLookup.Keys);
+            var whpSet = new HashSet<int>(whpLookup.Keys);
+
+            var skillCodeByHash = new Dictionary<int, string>(
+                whsLookup.Count + whoLookup.Count + whdLookup.Count + whkLookup.Count + whpLookup.Count);
+            foreach (var kv in whsLookup) skillCodeByHash[kv.Key] = kv.Value;
+            foreach (var kv in whoLookup) skillCodeByHash[kv.Key] = kv.Value;
+            foreach (var kv in whdLookup) skillCodeByHash[kv.Key] = kv.Value;
+            foreach (var kv in whkLookup) skillCodeByHash[kv.Key] = kv.Value;
+            foreach (var kv in whpLookup) skillCodeByHash[kv.Key] = kv.Value;
+
+            var paraCpLookup = Level5IdHelper.BuildPrefixLookup("para_cp");
+            int arionParamHash = Level5IdHelper.ComputeCrc32Utf8("para_cp0008");
+            int jpParamHash = Level5IdHelper.ComputeCrc32Utf8("para_cp0005");
 
             var wksSet = BuildRangeHashSet("wks", 1, 8999);
             var wkoSet = BuildRangeHashSet("wko", 1, 8999);
@@ -103,7 +124,6 @@ namespace IEGORandomizer.Engine.Modules
                                           wkdSet.Contains(sk.SkillHash) ||
                                           wkkSet.Contains(sk.SkillHash);
 
-                    // Skip passive talents (retail SkillPosition == 15, synthetic == 5, or whp*/wkp*) and non-wh*/wk* internal rows
                     if ((!isStandardPlayerActive && !isAvatarActive) ||
                         whpSet.Contains(sk.SkillHash) ||
                         sk.SkillPosition == 15 ||
@@ -135,7 +155,6 @@ namespace IEGORandomizer.Engine.Modules
             }
 
             // Build categorized player-usable skill pools strictly from genuine wh[sodkp]0001..8999 entries
-            // (excluding Fighting Spirit SkillType == 2 moves and non-wh* Void/Totem/buff internal entries)
             var candidateActiveMoves = skills
                 .Where(s => s.SkillHash != 0 &&
                             s.SkillType != 2 &&
@@ -183,161 +202,510 @@ namespace IEGORandomizer.Engine.Modules
                     talentMoves = retailVerifiedTalents;
             }
 
-            // 2. Player Initial Skills, Level-Up Learnsets, and Talents
-            if ((options.RandomizeInitialSkills || options.RandomizeLevelUpLearnsets || options.RandomizeTalents) &&
+            // 2. Player Initial Skills, Level-Up Learnsets, Talents, Starter Guarantee & Dynamic Story Swap
+            if ((options.RandomizeInitialSkills ||
+                 options.RandomizeLevelUpLearnsets ||
+                 options.RandomizeTalents ||
+                 options.GuaranteeInitialMoveOrSpiritForAllPlayers ||
+                 options.GuaranteeProtagonistInitialSkill) &&
                 activeFieldMoves.Count > 0 &&
                 skillTable.Length > 0)
             {
                 DeterministicRng learnRng = seeds.GetSubsystem("skills.learnsets");
                 bool charaParamsModified = false;
+                bool skillTableModified = false;
 
+                // Snapshot vanilla skill_table slots before mutation for Dynamic Story-Technique Swap mapping
+                var vanillaSlotHashesByPlayer = new Dictionary<int, (int SkillHash, int LevelLearned)[]>(charaParams.Length);
                 foreach (var cp in charaParams)
                 {
-                    if (cp.ParamHash == 0 || cp.SpecialMoveCount <= 0)
-                        continue;
-                    if (cp.SpecialMoveOffset < 0 || cp.SpecialMoveOffset + cp.SpecialMoveCount > skillTable.Length)
-                        continue;
-
-                    bool isProtectedPlayer = protection.ProtectedStoryPlayerParamHashes.Contains(cp.ParamHash);
-                    var assignedInPlayer = new HashSet<int>();
-
-                    // Compute usable TP at Level 1 so initial skills can always be executed
-                    int usableLv1Tp = EstimateUsableInitialTp(game, cp);
-
-                    for (int slot = 0; slot < cp.SpecialMoveCount; slot++)
+                    if (cp.ParamHash == 0 || cp.SpecialMoveCount <= 0 ||
+                        cp.SpecialMoveOffset < 0 || cp.SpecialMoveOffset + cp.SpecialMoveCount > skillTable.Length)
                     {
-                        ISkillTable entry = skillTable[cp.SpecialMoveOffset + slot];
-                        if (entry.SkillHash == 0)
+                        continue;
+                    }
+
+                    var snap = new (int SkillHash, int LevelLearned)[cp.SpecialMoveCount];
+                    for (int s = 0; s < cp.SpecialMoveCount; s++)
+                    {
+                        snap[s] = (skillTable[cp.SpecialMoveOffset + s].SkillHash, skillTable[cp.SpecialMoveOffset + s].LevelLearned);
+                    }
+                    vanillaSlotHashesByPlayer[cp.ParamHash] = snap;
+                }
+
+                if (options.RandomizeInitialSkills || options.RandomizeLevelUpLearnsets || options.RandomizeTalents)
+                {
+                    foreach (var cp in charaParams)
+                    {
+                        if (cp.ParamHash == 0 || cp.SpecialMoveCount <= 0)
+                            continue;
+                        if (cp.SpecialMoveOffset < 0 || cp.SpecialMoveOffset + cp.SpecialMoveCount > skillTable.Length)
                             continue;
 
-                        // Never overwrite a skill explicitly invoked by a story script on a story character
-                        if (isProtectedPlayer && protection.ScriptReferencedSkillHashes.Contains(entry.SkillHash))
-                        {
-                            assignedInPlayer.Add(entry.SkillHash);
-                            continue;
-                        }
+                        bool isProtectedPlayer = protection.ProtectedStoryPlayerParamHashes.Contains(cp.ParamHash);
+                        var assignedInPlayer = new HashSet<int>();
+                        int usableLv1Tp = EstimateUsableInitialTp(game, cp);
 
-                        bool isInitialSlot = slot == 0 || entry.LevelLearned <= 5;
-                        bool wasTalent = whpSet.Contains(entry.SkillHash) ||
-                                         (skillByHash.TryGetValue(entry.SkillHash, out var origSkill) &&
-                                          (origSkill.SkillPosition == 15 || origSkill.SkillPosition == 5));
-
-                        if (wasTalent)
+                        for (int slot = 0; slot < cp.SpecialMoveCount; slot++)
                         {
-                            if (!options.RandomizeTalents || talentMoves.Count == 0)
+                            ISkillTable entry = skillTable[cp.SpecialMoveOffset + slot];
+                            if (entry.SkillHash == 0)
+                                continue;
+
+                            // Only freeze script-referenced skills when Dynamic Story-Technique Swap is explicitly disabled
+                            if (!options.EnableDynamicStoryTechniqueSwap &&
+                                isProtectedPlayer &&
+                                protection.ScriptReferencedSkillHashes.Contains(entry.SkillHash))
                             {
                                 assignedInPlayer.Add(entry.SkillHash);
                                 continue;
                             }
 
-                            int pickedTalent = PickUniqueSkillHash(talentMoves, assignedInPlayer, null, learnRng);
-                            entry.SkillHash = pickedTalent;
-                            assignedInPlayer.Add(pickedTalent);
+                            int originalHash = entry.SkillHash;
+                            bool isInitialSlot = slot == 0 || entry.LevelLearned <= 5;
+                            bool wasTalent = whpSet.Contains(originalHash) ||
+                                             (skillByHash.TryGetValue(originalHash, out var origSkill) &&
+                                              (origSkill.SkillPosition == 15 || origSkill.SkillPosition == 5));
+
+                            if (wasTalent)
+                            {
+                                if (!options.RandomizeTalents || talentMoves.Count == 0)
+                                {
+                                    assignedInPlayer.Add(entry.SkillHash);
+                                    continue;
+                                }
+
+                                int pickedTalent = PickUniqueSkillHash(talentMoves, assignedInPlayer, null, learnRng, avoidHash: originalHash);
+                                entry.SkillHash = pickedTalent;
+                                assignedInPlayer.Add(pickedTalent);
+                                skillTableModified = true;
+                                report.RandomizedSkillSlotsCount++;
+                                continue;
+                            }
+
+                            if (isInitialSlot && !options.RandomizeInitialSkills)
+                            {
+                                assignedInPlayer.Add(entry.SkillHash);
+                                continue;
+                            }
+
+                            if (!isInitialSlot && !options.RandomizeLevelUpLearnsets)
+                            {
+                                assignedInPlayer.Add(entry.SkillHash);
+                                continue;
+                            }
+
+                            // When replacing a story-scripted skill slot, prefer the same tactical category (Shoot/Dribble/Block/Save)
+                            // so scripted shots remain shots, scripted saves remain saves, and scripted dribbles remain dribbles!
+                            IReadOnlyList<ISkillConfig> candidatePool;
+                            if (isProtectedPlayer && protection.ScriptReferencedSkillHashes.Contains(originalHash))
+                            {
+                                candidatePool = SelectCategoryMatchedPool(
+                                    originalHash,
+                                    whsSet,
+                                    whoSet,
+                                    whdSet,
+                                    whkSet,
+                                    shotMoves,
+                                    dribbleMoves,
+                                    blockMoves,
+                                    saveMoves,
+                                    activeFieldMoves);
+                            }
+                            else
+                            {
+                                candidatePool = SelectCompatiblePool(
+                                    cp.PlayerPosition,
+                                    slot,
+                                    options.EnforcePositionCompatibility,
+                                    saveMoves,
+                                    shotMoves,
+                                    dribbleMoves,
+                                    blockMoves,
+                                    activeFieldMoves,
+                                    learnRng);
+                            }
+
+                            int? maxTpConstraint = (isInitialSlot && options.EnsureUsableInitialTp)
+                                ? usableLv1Tp
+                                : null;
+
+                            int chosenHash = PickUniqueSkillHash(
+                                candidatePool,
+                                assignedInPlayer,
+                                maxTpConstraint,
+                                learnRng,
+                                avoidHash: originalHash);
+                            entry.SkillHash = chosenHash;
+                            assignedInPlayer.Add(chosenHash);
+                            skillTableModified = true;
                             report.RandomizedSkillSlotsCount++;
-                            continue;
-                        }
 
-                        if (isInitialSlot && !options.RandomizeInitialSkills)
-                        {
-                            assignedInPlayer.Add(entry.SkillHash);
-                            continue;
-                        }
-
-                        if (!isInitialSlot && !options.RandomizeLevelUpLearnsets)
-                        {
-                            assignedInPlayer.Add(entry.SkillHash);
-                            continue;
-                        }
-
-                        IReadOnlyList<ISkillConfig> candidatePool = SelectCompatiblePool(
-                            cp.PlayerPosition,
-                            slot,
-                            options.EnforcePositionCompatibility,
-                            saveMoves,
-                            shotMoves,
-                            dribbleMoves,
-                            blockMoves,
-                            activeFieldMoves,
-                            learnRng);
-
-                        int? maxTpConstraint = (isInitialSlot && options.EnsureUsableInitialTp)
-                            ? usableLv1Tp
-                            : null;
-
-                        int chosenHash = PickUniqueSkillHash(candidatePool, assignedInPlayer, maxTpConstraint, learnRng);
-                        entry.SkillHash = chosenHash;
-                        assignedInPlayer.Add(chosenHash);
-                        report.RandomizedSkillSlotsCount++;
-
-                        // If even the cheapest move in the pool exceeded the player's Lv.1 TP, bump TP safely
-                        if (isInitialSlot &&
-                            options.EnsureUsableInitialTp &&
-                            skillByHash.TryGetValue(chosenHash, out var chosenCfg) &&
-                            chosenCfg.TPCost > usableLv1Tp)
-                        {
-                            cp.TP = Math.Max(cp.TP, chosenCfg.TPCost + 20);
-                            usableLv1Tp = EstimateUsableInitialTp(game, cp);
-                            charaParamsModified = true;
+                            if (isInitialSlot &&
+                                options.EnsureUsableInitialTp &&
+                                skillByHash.TryGetValue(chosenHash, out var chosenCfg) &&
+                                chosenCfg.TPCost > usableLv1Tp)
+                            {
+                                cp.TP = Math.Max(cp.TP, chosenCfg.TPCost + 20);
+                                usableLv1Tp = EstimateUsableInitialTp(game, cp);
+                                charaParamsModified = true;
+                            }
                         }
                     }
                 }
 
-                game.SaveSkillTable(skillTable);
+                // 2b. Starter Technique / Initial Fighting Spirit Guarantee (isolated RNG subsystem "skills.starter_guarantee")
+                if (options.GuaranteeInitialMoveOrSpiritForAllPlayers || options.GuaranteeProtagonistInitialSkill)
+                {
+                    DeterministicRng starterRng = seeds.GetSubsystem("skills.starter_guarantee");
+                    var validAvatarPool = (visualProfile?.ValidAvatarHashes != null && visualProfile.ValidAvatarHashes.Count > 0)
+                        ? visualProfile.ValidAvatarHashes.OrderBy(h => h).ToList()
+                        : avatars.Where(a => a.AvatarHash != 0 && a.SpecialMoveID != 0 && a.FightingSpiritPoint > 0)
+                                 .Select(a => a.AvatarHash)
+                                 .OrderBy(h => h)
+                                 .ToList();
+
+                    foreach (var cp in charaParams)
+                    {
+                        if (cp.ParamHash == 0)
+                            continue;
+
+                        bool isArion = cp.ParamHash == arionParamHash;
+                        bool isJp = cp.ParamHash == jpParamHash;
+                        if (!options.GuaranteeInitialMoveOrSpiritForAllPlayers && !isArion)
+                            continue;
+
+                        if (cp.SpecialMoveCount <= 0 ||
+                            cp.SpecialMoveOffset < 0 ||
+                            cp.SpecialMoveOffset + cp.SpecialMoveCount > skillTable.Length)
+                        {
+                            // Playable character with 0 move slots and 0 Fighting Spirit: grant an initial playable EG!
+                            if (!isArion &&
+                                !isJp &&
+                                cp.FightingSpiritHash == 0 &&
+                                validAvatarPool.Count > 0 &&
+                                !protection.ProtectedAvatarBearerParamHashes.Contains(cp.ParamHash) &&
+                                (visualProfile == null || visualProfile.CoherentPlayableParamHashes.Contains(cp.ParamHash)))
+                            {
+                                cp.FightingSpiritHash = starterRng.PickOne(validAvatarPool);
+                                charaParamsModified = true;
+                                report.GuaranteedInitialStarterCount++;
+                            }
+                            continue;
+                        }
+
+                        // Special story-unlock slot preservation for Arion (para_cp0008) & JP (para_cp0005):
+                        // Give Slot 0 LevelLearned = 1 (100% guaranteed initial active move from Minute 0!)
+                        // while shifting story-locked LevelLearned == 101 markers onto Slots 1..3 so story cutscenes
+                        // (ev42033100, btl0006, btl0308) STILL awaken brand-new randomized techniques!
+                        if ((isArion || isJp) &&
+                            options.EnableDynamicStoryTechniqueSwap &&
+                            vanillaSlotHashesByPlayer.TryGetValue(cp.ParamHash, out var vanillaSlots))
+                        {
+                            var slot0 = skillTable[cp.SpecialMoveOffset];
+                            if (slot0.LevelLearned > 1)
+                            {
+                                if (isArion && cp.SpecialMoveCount >= 4 &&
+                                    vanillaSlots[0].LevelLearned >= 100 &&
+                                    vanillaSlots[1].LevelLearned >= 100 &&
+                                    vanillaSlots[2].LevelLearned >= 100)
+                                {
+                                    slot0.LevelLearned = 1;
+                                    skillTable[cp.SpecialMoveOffset + 1].LevelLearned = 101;
+                                    skillTable[cp.SpecialMoveOffset + 2].LevelLearned = 101;
+                                    skillTable[cp.SpecialMoveOffset + 3].LevelLearned = 101;
+                                    skillTableModified = true;
+                                }
+                                else if (isJp && cp.SpecialMoveCount >= 2 && vanillaSlots[0].LevelLearned >= 100)
+                                {
+                                    slot0.LevelLearned = 1;
+                                    skillTable[cp.SpecialMoveOffset + 1].LevelLearned = 101;
+                                    skillTableModified = true;
+                                }
+                                else
+                                {
+                                    slot0.LevelLearned = 1;
+                                    skillTableModified = true;
+                                }
+                            }
+                        }
+
+                        // Check whether player already has a Level-1 active move OR an initial Fighting Spirit (EG)
+                        bool hasLv1ActiveMove = false;
+                        int firstActiveCandidateSlot = -1;
+                        var assignedHashes = new HashSet<int>();
+
+                        for (int s = 0; s < cp.SpecialMoveCount; s++)
+                        {
+                            var st = skillTable[cp.SpecialMoveOffset + s];
+                            if (st.SkillHash != 0)
+                                assignedHashes.Add(st.SkillHash);
+
+                            bool isActive = st.SkillHash != 0 &&
+                                            !whpSet.Contains(st.SkillHash) &&
+                                            (whsSet.Contains(st.SkillHash) ||
+                                             whoSet.Contains(st.SkillHash) ||
+                                             whdSet.Contains(st.SkillHash) ||
+                                             whkSet.Contains(st.SkillHash));
+
+                            if (isActive)
+                            {
+                                if (st.LevelLearned == 1)
+                                    hasLv1ActiveMove = true;
+                                if (firstActiveCandidateSlot < 0 && st.LevelLearned < 100)
+                                    firstActiveCandidateSlot = s;
+                            }
+                        }
+
+                        bool hasInitialSpirit = cp.FightingSpiritHash != 0;
+                        bool mustForceInitialMove = isArion || isJp || (!hasLv1ActiveMove && !hasInitialSpirit);
+
+                        if (mustForceInitialMove && !hasLv1ActiveMove)
+                        {
+                            int targetSlot = firstActiveCandidateSlot >= 0 ? firstActiveCandidateSlot : 0;
+                            var targetEntry = skillTable[cp.SpecialMoveOffset + targetSlot];
+                            int usableLv1Tp = EstimateUsableInitialTp(game, cp);
+
+                            bool targetIsActive = targetEntry.SkillHash != 0 &&
+                                                  !whpSet.Contains(targetEntry.SkillHash) &&
+                                                  (whsSet.Contains(targetEntry.SkillHash) ||
+                                                   whoSet.Contains(targetEntry.SkillHash) ||
+                                                   whdSet.Contains(targetEntry.SkillHash) ||
+                                                   whkSet.Contains(targetEntry.SkillHash));
+
+                            if (!targetIsActive)
+                            {
+                                var rolePool = SelectCompatiblePool(
+                                    cp.PlayerPosition,
+                                    0,
+                                    options.EnforcePositionCompatibility,
+                                    saveMoves,
+                                    shotMoves,
+                                    dribbleMoves,
+                                    blockMoves,
+                                    activeFieldMoves,
+                                    starterRng);
+                                assignedHashes.Remove(targetEntry.SkillHash);
+                                targetEntry.SkillHash = PickUniqueSkillHash(rolePool, assignedHashes, usableLv1Tp, starterRng);
+                            }
+                            else if (options.EnsureUsableInitialTp &&
+                                     skillByHash.TryGetValue(targetEntry.SkillHash, out var curCfg) &&
+                                     curCfg.TPCost > usableLv1Tp)
+                            {
+                                var rolePool = SelectCompatiblePool(
+                                    cp.PlayerPosition,
+                                    0,
+                                    options.EnforcePositionCompatibility,
+                                    saveMoves,
+                                    shotMoves,
+                                    dribbleMoves,
+                                    blockMoves,
+                                    activeFieldMoves,
+                                    starterRng);
+                                assignedHashes.Remove(targetEntry.SkillHash);
+                                targetEntry.SkillHash = PickUniqueSkillHash(rolePool, assignedHashes, usableLv1Tp, starterRng);
+                            }
+
+                            if (options.EnsureUsableInitialTp &&
+                                skillByHash.TryGetValue(targetEntry.SkillHash, out var finalCfg) &&
+                                finalCfg.TPCost > usableLv1Tp)
+                            {
+                                cp.TP = Math.Max(cp.TP, finalCfg.TPCost + 20);
+                                charaParamsModified = true;
+                            }
+
+                            targetEntry.LevelLearned = 1;
+                            skillTableModified = true;
+                            report.GuaranteedInitialStarterCount++;
+                        }
+                    }
+                }
+
+                // 2c. Build Dynamic Story-Technique Swap mappings for Squirrel .nutb patching
+                if (options.EnableDynamicStoryTechniqueSwap)
+                {
+                    DeterministicRng storySwapRng = seeds.GetSubsystem("skills.story_swap");
+
+                    foreach (var cp in charaParams)
+                    {
+                        if (cp.ParamHash == 0 || !paraCpLookup.TryGetValue(cp.ParamHash, out string paraCode))
+                            continue;
+                        if (!vanillaSlotHashesByPlayer.TryGetValue(cp.ParamHash, out var vanillaSlots))
+                            continue;
+
+                        // Special shifted story-unlock mapping for Arion (Slots 0..2 -> Slots 1..3) and JP (Slot 0 -> Slot 1)
+                        if (cp.ParamHash == arionParamHash &&
+                            cp.SpecialMoveCount >= 4 &&
+                            vanillaSlots[0].LevelLearned >= 100 &&
+                            skillTable[cp.SpecialMoveOffset].LevelLearned == 1 &&
+                            skillTable[cp.SpecialMoveOffset + 1].LevelLearned >= 100)
+                        {
+                            for (int vIdx = 0; vIdx < 3; vIdx++)
+                            {
+                                if (skillCodeByHash.TryGetValue(vanillaSlots[vIdx].SkillHash, out string vCode) &&
+                                    skillCodeByHash.TryGetValue(skillTable[cp.SpecialMoveOffset + vIdx + 1].SkillHash, out string nCode))
+                                {
+                                    protection.StorySkillSlotRemaps[(paraCode, vCode)] = nCode;
+                                }
+                            }
+                            continue;
+                        }
+
+                        if (cp.ParamHash == jpParamHash &&
+                            cp.SpecialMoveCount >= 2 &&
+                            vanillaSlots[0].LevelLearned >= 100 &&
+                            skillTable[cp.SpecialMoveOffset].LevelLearned == 1 &&
+                            skillTable[cp.SpecialMoveOffset + 1].LevelLearned >= 100)
+                        {
+                            if (skillCodeByHash.TryGetValue(vanillaSlots[0].SkillHash, out string vCode) &&
+                                skillCodeByHash.TryGetValue(skillTable[cp.SpecialMoveOffset + 1].SkillHash, out string nCode))
+                            {
+                                protection.StorySkillSlotRemaps[(paraCode, vCode)] = nCode;
+                            }
+                            continue;
+                        }
+
+                        for (int s = 0; s < cp.SpecialMoveCount; s++)
+                        {
+                            int vHash = vanillaSlots[s].SkillHash;
+                            int nHash = skillTable[cp.SpecialMoveOffset + s].SkillHash;
+                            if (vHash != 0 && nHash != 0 &&
+                                skillCodeByHash.TryGetValue(vHash, out string vCode) &&
+                                skillCodeByHash.TryGetValue(nHash, out string nCode))
+                            {
+                                protection.StorySkillSlotRemaps[(paraCode, vCode)] = nCode;
+                            }
+                        }
+                    }
+
+                    // Also map any battle-only / event-referenced (para_cpXXXX, wh*YYYY) call-site whose vanilla skill
+                    // was not in the player's 4 base skill_table rows (e.g. temporary match skills in btl0002 / btl0008!)
+                    foreach (var callSite in protection.NutbAudit.SkillCallSites
+                                 .Where(cs => !string.IsNullOrEmpty(cs.CharaId) &&
+                                              !string.IsNullOrEmpty(cs.SkillId) &&
+                                              cs.SkillId.StartsWith("wh", StringComparison.Ordinal))
+                                 .OrderBy(cs => cs.VirtualPath, StringComparer.Ordinal)
+                                 .ThenBy(cs => cs.FunctionName, StringComparer.Ordinal))
+                    {
+                        var key = (callSite.CharaId, callSite.SkillId);
+                        if (protection.StorySkillSlotRemaps.ContainsKey(key))
+                            continue;
+
+                        int vHash = Level5IdHelper.ComputeCrc32Utf8(callSite.SkillId);
+                        var catPool = SelectCategoryMatchedPool(
+                            vHash,
+                            whsSet,
+                            whoSet,
+                            whdSet,
+                            whkSet,
+                            shotMoves,
+                            dribbleMoves,
+                            blockMoves,
+                            saveMoves,
+                            activeFieldMoves);
+
+                        int pickedHash = PickUniqueSkillHash(catPool, new HashSet<int>(), null, storySwapRng, avoidHash: vHash);
+                        if (skillCodeByHash.TryGetValue(pickedHash, out string pickedCode))
+                        {
+                            protection.StorySkillSlotRemaps[key] = pickedCode;
+                        }
+                    }
+
+                    report.DynamicStorySkillMappingsCount = protection.StorySkillSlotRemaps.Count;
+                }
+
+                if (skillTableModified)
+                {
+                    game.SaveSkillTable(skillTable);
+                }
                 if (charaParamsModified)
                 {
                     game.SaveCharaparams(charaParams);
                 }
             }
 
-            // 3. Fighting Spirit (Avatar) Skills
+            // 3. Fighting Spirit (Avatar) Skills & Stats
+            // CRITICAL: NEVER swap av.SpecialMoveID across spirits! In IEGO1, each spirit ckNNNN loads a dedicated
+            // skeletal animation /data/chr/motion/waza/vkaNNNN/vkaNNNN_ckNNNN.xc rigged 1-to-1 to that spirit's skeleton.
+            // Swapping SpecialMoveID across spirits crashes btl_manager when Victor summons Maestro (ck0002) after btl0302!
+            // Instead, safely randomize the spirit's passive talent (av.SkillID) and FightingSpiritPoint/Attack variance.
             if (options.RandomizeFightingSpiritSkills && avatars.Length > 0)
             {
                 DeterministicRng avSkillRng = seeds.GetSubsystem("skills.avatars");
 
-                var avatarActivePool = skills
-                    .Where(s => (wksSet.Contains(s.SkillHash) ||
-                                 wkoSet.Contains(s.SkillHash) ||
-                                 wkdSet.Contains(s.SkillHash) ||
-                                 wkkSet.Contains(s.SkillHash)) &&
-                                !dummyManualHashes.Contains(s.SkillHash) &&
-                                s.Power > 0)
-                    .ToList();
-
                 var avatarPassivePool = avatars
                     .Select(a => a.SkillID)
                     .Where(h => h != 0)
+                    .Concat(skills.Where(s => wkpSet.Contains(s.SkillHash)).Select(s => s.SkillHash))
                     .Distinct()
+                    .OrderBy(h => h)
                     .ToList();
 
-                if (avatarActivePool.Count > 0)
+                bool avatarsChanged = false;
+                foreach (var av in avatars)
                 {
-                    foreach (var av in avatars)
+                    if (av.AvatarHash == 0)
+                        continue;
+
+                    bool modifiedThisAvatar = false;
+                    if (avatarPassivePool.Count > 1 && av.SkillID != 0)
                     {
-                        if (av.AvatarHash == 0)
-                            continue;
-                        if (protection.ScriptReferencedAvatarHashes.Contains(av.AvatarHash) &&
-                            protection.ScriptReferencedSkillHashes.Contains(av.SpecialMoveID))
-                        {
-                            continue;
-                        }
-
-                        // Match avatar position role using canonical wk* prefix (1=GK->wkk, 2=FW->wks, 3=MF->wko/wks, 4=DF->wkd)
-                        var roleMatches = avatarActivePool
-                            .Where(s => IsAvatarMoveMatchingPosition(av.Position, s.SkillHash, wksSet, wkoSet, wkdSet, wkkSet))
-                            .ToList();
-                        var pool = roleMatches.Count > 0 ? roleMatches : avatarActivePool;
-
-                        av.SpecialMoveID = avSkillRng.PickOne(pool).SkillHash;
-                        if (av.SkillID != 0 && avatarPassivePool.Count > 0)
-                        {
-                            av.SkillID = avSkillRng.PickOne(avatarPassivePool);
-                        }
-                        report.RandomizedAvatarSkillsCount++;
+                        int nextPassive = avSkillRng.PickOne(avatarPassivePool);
+                        if (nextPassive == av.SkillID)
+                            nextPassive = avatarPassivePool[(avatarPassivePool.IndexOf(av.SkillID) + 1) % avatarPassivePool.Count];
+                        av.SkillID = nextPassive;
+                        modifiedThisAvatar = true;
                     }
 
+                    if (av.FightingSpiritPoint > 0)
+                    {
+                        int fspDelta = avSkillRng.NextIntInclusive(-15, 15);
+                        av.FightingSpiritPoint = Math.Clamp((int)Math.Round(av.FightingSpiritPoint * (100 + fspDelta) / 100.0), 60, 260);
+                        modifiedThisAvatar = true;
+                    }
+
+                    if (av.Attack > 0)
+                    {
+                        int atkDelta = avSkillRng.NextIntInclusive(-15, 15);
+                        av.Attack = Math.Clamp((int)Math.Round(av.Attack * (100 + atkDelta) / 100.0), 40, 240);
+                        modifiedThisAvatar = true;
+                    }
+
+                    if (modifiedThisAvatar)
+                    {
+                        avatarsChanged = true;
+                        report.RandomizedAvatarSkillsCount++;
+                    }
+                }
+
+                if (avatarsChanged)
+                {
                     game.SaveAvatars(avatars);
                 }
             }
+        }
+
+        private static IReadOnlyList<ISkillConfig> SelectCategoryMatchedPool(
+            int vanillaSkillHash,
+            HashSet<int> whsSet,
+            HashSet<int> whoSet,
+            HashSet<int> whdSet,
+            HashSet<int> whkSet,
+            List<ISkillConfig> shotMoves,
+            List<ISkillConfig> dribbleMoves,
+            List<ISkillConfig> blockMoves,
+            List<ISkillConfig> saveMoves,
+            List<ISkillConfig> fallbackMoves)
+        {
+            if (whsSet.Contains(vanillaSkillHash) && shotMoves.Count > 0)
+                return shotMoves;
+            if (whoSet.Contains(vanillaSkillHash) && dribbleMoves.Count > 0)
+                return dribbleMoves;
+            if (whdSet.Contains(vanillaSkillHash) && blockMoves.Count > 0)
+                return blockMoves;
+            if (whkSet.Contains(vanillaSkillHash) && saveMoves.Count > 0)
+                return saveMoves;
+            return fallbackMoves;
         }
 
         private static IReadOnlyList<ISkillConfig> SelectCompatiblePool(
@@ -354,7 +722,6 @@ namespace IEGORandomizer.Engine.Modules
             if (!enforceCompatibility)
                 return allActiveMoves;
 
-            // PlayerPositions.json: 1=Goalkeeper, 2=Forward, 3=Midfielder, 4=Defender
             if (slotIndex == 0)
             {
                 return playerPosition switch
@@ -367,7 +734,6 @@ namespace IEGORandomizer.Engine.Modules
                 };
             }
 
-            // Secondary slots keep GKs out of useless 4-shot builds and field players out of GK-only saves
             if (playerPosition == 1)
             {
                 if (slotIndex == 1 && saveMoves.Count > 0)
@@ -380,7 +746,6 @@ namespace IEGORandomizer.Engine.Modules
             if (nonSaveMoves.Count == 0)
                 return allActiveMoves;
 
-            // Bias secondary slots toward player role while allowing natural variety
             if (rng.NextChancePercent(60))
             {
                 return playerPosition switch
@@ -399,8 +764,18 @@ namespace IEGORandomizer.Engine.Modules
             IReadOnlyList<ISkillConfig> pool,
             HashSet<int> alreadyAssigned,
             int? maxTpCost,
-            DeterministicRng rng)
+            DeterministicRng rng,
+            int avoidHash = 0)
         {
+            var strictFiltered = pool
+                .Where(s => s.SkillHash != avoidHash &&
+                            !alreadyAssigned.Contains(s.SkillHash) &&
+                            (!maxTpCost.HasValue || s.TPCost <= maxTpCost.Value))
+                .ToList();
+
+            if (strictFiltered.Count > 0)
+                return rng.PickOne(strictFiltered).SkillHash;
+
             var filtered = pool
                 .Where(s => !alreadyAssigned.Contains(s.SkillHash) &&
                             (!maxTpCost.HasValue || s.TPCost <= maxTpCost.Value))
@@ -409,14 +784,16 @@ namespace IEGORandomizer.Engine.Modules
             if (filtered.Count > 0)
                 return rng.PickOne(filtered).SkillHash;
 
-            // Fallback 1: relax uniqueness before relaxing TP ceiling
             if (maxTpCost.HasValue)
             {
-                var tpSafe = pool.Where(s => s.TPCost <= maxTpCost.Value).ToList();
+                var tpSafe = pool.Where(s => s.TPCost <= maxTpCost.Value && s.SkillHash != avoidHash).ToList();
                 if (tpSafe.Count > 0)
                     return rng.PickOne(tpSafe).SkillHash;
 
-                // Pick lowest-TP skill in pool
+                var tpSafeAny = pool.Where(s => s.TPCost <= maxTpCost.Value).ToList();
+                if (tpSafeAny.Count > 0)
+                    return rng.PickOne(tpSafeAny).SkillHash;
+
                 return pool.OrderBy(s => s.TPCost).First().SkillHash;
             }
 
@@ -429,7 +806,6 @@ namespace IEGORandomizer.Engine.Modules
 
         private static int EstimateUsableInitialTp(SafeGOGame game, ICharaparam cp)
         {
-            // Uses the exact 0x0033E404 stat calculator ported in Lynx's GOStatCalculator
             try
             {
                 if (game.StatCalculator != null)
@@ -461,22 +837,15 @@ namespace IEGORandomizer.Engine.Modules
             return set;
         }
 
-        private static bool IsAvatarMoveMatchingPosition(
-            int avatarPosition,
-            int skillHash,
-            HashSet<int> wksSet,
-            HashSet<int> wkoSet,
-            HashSet<int> wkdSet,
-            HashSet<int> wkkSet)
+        private static Dictionary<int, string> BuildRangeCodeLookup(string prefix, int minInclusive, int maxInclusive)
         {
-            return avatarPosition switch
+            var dict = new Dictionary<int, string>(maxInclusive - minInclusive + 1);
+            for (int i = minInclusive; i <= maxInclusive; i++)
             {
-                1 => wkkSet.Contains(skillHash), // GK -> Save (wkk)
-                2 => wksSet.Contains(skillHash), // FW -> Shoot (wks)
-                3 => wkoSet.Contains(skillHash) || wksSet.Contains(skillHash), // MF -> Dribble/Shoot
-                4 => wkdSet.Contains(skillHash), // DF -> Block (wkd)
-                _ => true
-            };
+                string code = $"{prefix}{i:D4}";
+                dict[Level5IdHelper.ComputeCrc32Utf8(code)] = code;
+            }
+            return dict;
         }
     }
 }

@@ -391,7 +391,7 @@ namespace IEGORandomizer.Tests
 
                 var svc = new CiaWorkflowService();
 
-                // 1. Default FBI Update .cia from V.0.0.0 -> V.1.1.2 (raw 1042) + companion Luma3DS LayeredFS file
+                // 1. Default FBI Update .cia from V.0.0.0 -> V.1.2.0 (raw 1056) + companion Luma3DS LayeredFS file
                 string update1Cia = Path.Combine(tempDir, "Out1", "Luz_Update1.cia");
                 var opts1 = new RandomizerOptions { Seed = "FBI-UPDATE-1" };
                 opts1.Cia.BumpTitleVersionForFbiUpdate = true;
@@ -401,7 +401,7 @@ namespace IEGORandomizer.Tests
                 Assert.Equal((ushort)0, rep1.CiaBuildTelemetry.SourceTitleVersionRaw);
                 Assert.Equal("V.0.0.0", rep1.CiaBuildTelemetry.SourceTitleVersionFormatted);
                 Assert.Equal(CiaConstants.DefaultFbiUpdateTitleVersionRaw, rep1.CiaBuildTelemetry.TitleVersionRaw);
-                Assert.Equal("V.1.1.2", rep1.CiaBuildTelemetry.TitleVersionFormatted);
+                Assert.Equal("V.1.2.0", rep1.CiaBuildTelemetry.TitleVersionFormatted);
                 Assert.True(rep1.CiaBuildTelemetry.IsFbiInPlaceUpdateReady);
                 Assert.Equal("0004000000112F00", rep1.CiaBuildTelemetry.TitleIdHex);
                 Assert.Equal(512u * 1024u, rep1.CiaBuildTelemetry.PreservedSaveDataSizeBytes);
@@ -410,16 +410,16 @@ namespace IEGORandomizer.Tests
                 Assert.True(File.Exists(expectedLumaPatch), "Expected companion Luma3DS LayeredFS ie_a.fa to be exported.");
 
                 var inspect1 = svc.InspectLocalCia(update1Cia);
-                Assert.Equal((ushort)1042, inspect1.TmdTitleVersionRaw);
-                Assert.Equal("V.1.1.2", inspect1.TmdTitleVersionFormatted);
+                Assert.Equal((ushort)1056, inspect1.TmdTitleVersionRaw);
+                Assert.Equal("V.1.2.0", inspect1.TmdTitleVersionFormatted);
                 Assert.True(inspect1.TmdInternalHashesValid);
 
-                // 2. Chained second update (feeding V.1.1.2 .cia into RandomizeCiaToCia) -> automatically bumps to V.1.1.3 (1043)
+                // 2. Chained second update (feeding V.1.2.0 .cia into RandomizeCiaToCia) -> automatically bumps to V.1.2.1 (1057)
                 string update2Cia = Path.Combine(tempDir, "Out2", "Luz_Update2.cia");
                 var rep2 = svc.RandomizeCiaToCia(update1Cia, update2Cia, new RandomizerOptions { Seed = "FBI-UPDATE-2" });
-                Assert.Equal((ushort)1042, rep2.CiaBuildTelemetry.SourceTitleVersionRaw);
-                Assert.Equal((ushort)1043, rep2.CiaBuildTelemetry.TitleVersionRaw);
-                Assert.Equal("V.1.1.3", rep2.CiaBuildTelemetry.TitleVersionFormatted);
+                Assert.Equal((ushort)1056, rep2.CiaBuildTelemetry.SourceTitleVersionRaw);
+                Assert.Equal((ushort)1057, rep2.CiaBuildTelemetry.TitleVersionRaw);
+                Assert.Equal("V.1.2.1", rep2.CiaBuildTelemetry.TitleVersionFormatted);
                 Assert.True(rep2.CiaBuildTelemetry.IsFbiInPlaceUpdateReady);
 
                 // 3. CLI --cia-version 2.0.1 explicit override

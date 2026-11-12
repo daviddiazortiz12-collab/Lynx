@@ -9,6 +9,7 @@ using IEGORandomizer.Engine.Seeding;
 using IEGORandomizer.Engine.Validation;
 using Lynx.Core.Games;
 using Lynx.Core.RomFs;
+using Lynx.Core.Scripts;
 
 namespace IEGORandomizer.Engine
 {
@@ -88,15 +89,16 @@ namespace IEGORandomizer.Engine
                 visualProfile,
                 report);
 
-            ReportStep(progress, 52, "Randomizando subsistema B: Supertécnicas, talentos y compatibilidad de PT...");
+            ReportStep(progress, 52, "Randomizando subsistema B: Supertécnicas, talentos, técnica inicial garantizada y compatibilidad de PT...");
             SkillRandomizerModule.Execute(
                 workspace.Game,
                 seedEngine,
                 options.Skills,
                 protection,
+                visualProfile,
                 report);
 
-            ReportStep(progress, 64, "Randomizando subsistema C: Equipos rivales, dorsales, tácticas y pachangas...");
+            ReportStep(progress, 62, "Randomizando subsistema C: Equipos rivales, dorsales, tácticas y pachangas...");
             TeamRandomizerModule.Execute(
                 workspace.Game,
                 seedEngine,
@@ -104,7 +106,7 @@ namespace IEGORandomizer.Engine
                 protection,
                 report);
 
-            ReportStep(progress, 74, "Randomizando subsistema D: Cofres del mapa, cadenas de partidos y drops...");
+            ReportStep(progress, 70, "Randomizando subsistema D: Cofres del mapa, cadenas de partidos y drops...");
             RewardRandomizerModule.Execute(
                 workspace.Game,
                 seedEngine,
@@ -114,7 +116,7 @@ namespace IEGORandomizer.Engine
                 visualProfile,
                 report);
 
-            ReportStep(progress, 82, "Randomizando subsistema E: Equipaciones con validación de recursos 3D...");
+            ReportStep(progress, 78, "Randomizando subsistema E: Equipaciones con validación de recursos 3D...");
             UniformRandomizerModule.Execute(
                 workspace.Game,
                 seedEngine,
@@ -122,6 +124,39 @@ namespace IEGORandomizer.Engine
                 protection,
                 visualProfile,
                 report);
+
+            ReportStep(progress, 82, "Randomizando subsistema F: Entrenadores, Gerentes y NPCs de historia y mapa...");
+            NpcAndCoachRandomizerModule.Execute(
+                workspace.Game,
+                seedEngine,
+                options.Npcs,
+                protection,
+                visualProfile,
+                report);
+
+            if ((options.Skills.Enabled && options.Skills.EnableDynamicStoryTechniqueSwap && protection.StorySkillSlotRemaps.Count > 0) ||
+                (options.Npcs.Enabled && options.Npcs.RandomizeCoaches && protection.StoryDirectorRemaps.Count > 0))
+            {
+                ReportStep(progress, 85, "Sincronizando bytecode Squirrel (.nutb) para técnicas dinámicas de historia y entrenadores...");
+                var nutbPatchSummary = NutbBytecodeCodec.PatchArchiveStorySkillsAndDirectors(
+                    workspace.Game.IE_A.Directory,
+                    options.Skills.Enabled && options.Skills.EnableDynamicStoryTechniqueSwap
+                        ? protection.StorySkillSlotRemaps
+                        : null,
+                    options.Npcs.Enabled && options.Npcs.RandomizeCoaches
+                        ? protection.StoryDirectorRemaps
+                        : null,
+                    injectTemporarySkillForBattleUse: true);
+
+                report.PatchedNutbScriptsCount = nutbPatchSummary.PatchedFilesCount;
+                report.PatchedNutbSkillCallSitesCount =
+                    nutbPatchSummary.PatchedUnlockCallsCount +
+                    nutbPatchSummary.PatchedBattleLearnCallsCount +
+                    nutbPatchSummary.PatchedBattleForgetCallsCount +
+                    nutbPatchSummary.PatchedBattleBanCallsCount +
+                    nutbPatchSummary.InjectedTemporaryBattleSwapsCount;
+                report.InjectedTemporaryBattleSkillNodesCount = nutbPatchSummary.InjectedTemporaryBattleSwapsCount;
+            }
 
             // Enforce Blind-Play Mode guarantee before exporting
             if (options.BlindPlayMode)

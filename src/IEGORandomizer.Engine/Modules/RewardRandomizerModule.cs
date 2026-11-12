@@ -172,17 +172,29 @@ namespace IEGORandomizer.Engine.Modules
             if (options.RandomizeMatchDrops || options.RandomizePachangaDrops)
             {
                 DeterministicRng dropRng = seeds.GetSubsystem("rewards.team_drops");
+                var storyTeamIds = new HashSet<int>(
+                    game.GetStoryTeamsOnly().Select(s => s.TeamConfigID).Where(id => id != 0));
                 var encountTeamIds = new HashSet<int>(
                     game.GetEncounterTeamsOnly().Select(e => e.TeamConfigID).Where(id => id != 0));
+                var soccers = game.GetSoccers() ?? Array.Empty<ISoccerInfo>();
+                var miniBattleParamIds = new HashSet<int>(
+                    soccers.Where(s => s != null && s.SoccerMode == 1 && s.TeamParamID != 0).Select(s => s.TeamParamID));
+                var fullMatchParamIds = new HashSet<int>(
+                    soccers.Where(s => s != null && s.SoccerMode == 2 && s.TeamParamID != 0).Select(s => s.TeamParamID));
                 var teamParams = game.GetTeamParams();
                 bool modifiedDrops = false;
 
                 foreach (var tp in teamParams)
                 {
-                    if (tp.TeamParamID == 0)
+                    if (tp.TeamParamID == 0 || protection.ScriptedTeamParamHashes.Contains(tp.TeamParamID))
                         continue;
 
-                    bool isPachanga = encountTeamIds.Contains(tp.TeamConfigID);
+                    bool isPachanga = TeamRandomizerModule.IsMiniBattleTeamParam(
+                        tp,
+                        storyTeamIds,
+                        encountTeamIds,
+                        miniBattleParamIds,
+                        fullMatchParamIds);
                     if (isPachanga && !options.RandomizePachangaDrops)
                         continue;
                     if (!isPachanga && !options.RandomizeMatchDrops)

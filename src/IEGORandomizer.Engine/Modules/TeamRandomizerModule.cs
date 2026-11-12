@@ -45,9 +45,15 @@ namespace IEGORandomizer.Engine.Modules
             var fullMatchParamIds = new HashSet<int>(
                 soccers.Where(s => s != null && s.SoccerMode == 2 && s.TeamParamID != 0).Select(s => s.TeamParamID));
 
-            // Prefix CRC32 lookups for 11v11 formations (ifaXXXX), 5v5 mini-battle formations (ifbXXXX), and tactics (iisXXXX)
+            // Prefix CRC32 lookups:
+            // - ifa0001..ifa0099 = 11v11 Match formations
+            // - ifb0101..ifb0199 = 5v5 Mini-Battle (Pachanga) formations ONLY!
+            // - ifb0300..ifb0399 = 1v1 / 2v2 / 3v3 Story Drill formations (NEVER valid for 5v5 Pachangas or 11v11 Matches!)
             var ifaLookup = Level5IdHelper.BuildPrefixLookup("ifa");
-            var ifbLookup = Level5IdHelper.BuildPrefixLookup("ifb");
+            var validMiniIfbHashes = new HashSet<int>(
+                Enumerable.Range(101, 99).Select(n => Level5IdHelper.ComputeCrc32Utf8($"ifb{n:D4}")));
+            var drillIfbHashes = new HashSet<int>(
+                Enumerable.Range(300, 100).Select(n => Level5IdHelper.ComputeCrc32Utf8($"ifb{n:D4}")));
             var iisLookup = Level5IdHelper.BuildPrefixLookup("iis");
 
             // ItemTypes.json (retail IEGO1):
@@ -60,22 +66,22 @@ namespace IEGORandomizer.Engine.Modules
             var pendantPool = allItems.Where(i => i.ItemID != 0 && i.ItemCategory == 4).Select(i => i.ItemID).Distinct().ToList();
 
             var miniFormationSet = new HashSet<int>(
-                allItems.Where(i => i.ItemID != 0 && (i.ItemCategory == 20 || ifbLookup.ContainsKey(i.ItemID)))
-                        .Where(i => !ifaLookup.ContainsKey(i.ItemID))
+                allItems.Where(i => i.ItemID != 0 && (i.ItemCategory == 20 || validMiniIfbHashes.Contains(i.ItemID)))
+                        .Where(i => !ifaLookup.ContainsKey(i.ItemID) && !drillIfbHashes.Contains(i.ItemID))
                         .Select(i => i.ItemID));
 
             var matchFormationSet = new HashSet<int>(
                 allItems.Where(i => i.ItemID != 0 && (i.ItemCategory == 19 || ifaLookup.ContainsKey(i.ItemID)))
-                        .Where(i => i.ItemRef != 90 && !ifbLookup.ContainsKey(i.ItemID) && !miniFormationSet.Contains(i.ItemID))
+                        .Where(i => i.ItemRef != 90 && !validMiniIfbHashes.Contains(i.ItemID) && !drillIfbHashes.Contains(i.ItemID) && !miniFormationSet.Contains(i.ItemID))
                         .Select(i => i.ItemID));
 
-            // Include valid vanilla formations from unambiguously classified TeamParams
+            // Include valid vanilla formations from unambiguously classified TeamParams (strictly excluding ifb03XX drills!)
             foreach (var tp in teamParams)
             {
-                if (tp.FormationID == 0)
+                if (tp.FormationID == 0 || drillIfbHashes.Contains(tp.FormationID))
                     continue;
 
-                if (ifbLookup.ContainsKey(tp.FormationID))
+                if (validMiniIfbHashes.Contains(tp.FormationID))
                 {
                     miniFormationSet.Add(tp.FormationID);
                     matchFormationSet.Remove(tp.FormationID);
@@ -91,7 +97,9 @@ namespace IEGORandomizer.Engine.Modules
                     if (!matchFormationSet.Contains(tp.FormationID))
                         miniFormationSet.Add(tp.FormationID);
                 }
-                else if (storyTeamIds.Contains(tp.TeamConfigID) && !miniFormationSet.Contains(tp.FormationID))
+                else if (storyTeamIds.Contains(tp.TeamConfigID) &&
+                         !protection.ScriptedTeamConfigHashes.Contains(tp.TeamConfigID) &&
+                         !miniFormationSet.Contains(tp.FormationID))
                 {
                     matchFormationSet.Add(tp.FormationID);
                 }
@@ -252,17 +260,25 @@ namespace IEGORandomizer.Engine.Modules
 
                 if (options.RandomizeLevels && tp.Level > 0)
                 {
-                    int maxDelta = Math.Clamp(options.MaxLevelDelta, 1, 25);
-                    int delta = levelRng.NextIntInclusive(-maxDelta, maxDelta);
+                    // Cap level delta proportionally for early-game teams (e.g. Chapter 1 btl0002 at Lv.1-2)
+                    // so CalFinalRevision never imposes an unplayable stat penalty before RPG grinding unlocks!
+                    int effectiveMaxDelta = tp.Level <= 5
+                        ? Math.Min(1, options.MaxLevelDelta)
+                        : Math.Min(Math.Max(2, tp.Level / 2), Math.Clamp(options.MaxLevelDelta, 1, 25));
+                    int delta = levelRng.NextIntInclusive(-effectiveMaxDelta, effectiveMaxDelta);
                     tp.Level = Math.Clamp(tp.Level + delta, 1, 99);
                 }
 
                 if (options.RandomizeEquipment)
                 {
-                    if (bootsPool.Count > 0) tp.BootsID = equipRng.PickOne(bootsPool);
-                    if (glovesPool.Count > 0) tp.GlovesID = equipRng.PickOne(glovesPool);
-                    if (braceletPool.Count > 0) tp.BraceletID = equipRng.PickOne(braceletPool);
-                    if (pendantPool.Count > 0) tp.PendantID = equipRng.PickOne(pendantPool);
+                    if (bootsPool.Count > 0 && (!isPachanga || tp.BootsID != 0))
+                        tp.BootsID = equipRng.PickOne(bootsPool);
+                    if (glovesPool.Count > 0 && (!isPachanga || tp.GlovesID != 0))
+                        tp.GlovesID = equipRng.PickOne(glovesPool);
+                    if (braceletPool.Count > 0 && (!isPachanga || tp.BraceletID != 0))
+                        tp.BraceletID = equipRng.PickOne(braceletPool);
+                    if (pendantPool.Count > 0 && (!isPachanga || tp.PendantID != 0))
+                        tp.PendantID = equipRng.PickOne(pendantPool);
 
                     if (isPachanga && tp.BootsID != 0)
                     {

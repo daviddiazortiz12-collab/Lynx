@@ -12,8 +12,8 @@
       <div class="brand">
         <div class="brand-emblem">⚡</div>
         <div>
-          <h1>IEGO Randomizer <span style="font-size:0.78rem;color:#fbbf24;font-weight:700;">v1.1.2 · Edición 2DS/3DS</span></h1>
-          <p class="subtitle">Generador determinista para <strong>Inazuma Eleven GO: Luz y Sombra</strong> (Flujo Nativo <code>.cia</code> + Actualización FBI sin perder partida en <strong>Nintendo 2DS/3DS</strong>)</p>
+          <h1>IEGO Randomizer <span style="font-size:0.78rem;color:#fbbf24;font-weight:700;">v1.2.0 · Edición 2DS/3DS</span></h1>
+          <p class="subtitle">Generador determinista para <strong>Inazuma Eleven GO: Luz y Sombra</strong> (Actualización FBI <code>V.1.2.0</code> en <strong>Nintendo 2DS/3DS</strong> · Técnicas dinámicas de historia · Entrenadores, Gerentes y NPCs)</p>
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -74,12 +74,12 @@
             <div style="margin-top:10px;padding:10px 12px;border-radius:8px;background:rgba(59,130,246,0.10);border:1px solid rgba(59,130,246,0.32);">
               <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:0.86rem;line-height:1.4;">
                 <input id="ciaFbiUpdateBump" type="checkbox" checked style="margin-top:3px;" />
-                <span><strong>📲 Modo Actualización FBI en 2DS/3DS (Recomendado):</strong> Incrementa automáticamente la versión TMD del <code>.cia</code> (ej. <code>V.0.0.0 → V.1.1.2</code>) manteniendo el mismo <code>TitleID</code> y <code>SaveDataSize</code> para que <strong>FBI sobrescriba el juego instalado sin borrar tu partida guardada (<code>00000001.sav</code>)</strong>.</span>
+                <span><strong>📲 Modo Actualización FBI en 2DS/3DS (Recomendado):</strong> Incrementa automáticamente la versión TMD del <code>.cia</code> (ej. <code>V.0.0.0 / V.1.1.2 → V.1.2.0</code>) manteniendo el mismo <code>TitleID</code> y <code>SaveDataSize</code> para que <strong>FBI reconozca el <code>.cia</code> como actualización y sobrescriba el juego sin borrar tu partida guardada (<code>00000001.sav</code>)</strong>.</span>
               </label>
               <div class="two-col" style="margin-top:8px;">
                 <div>
                   <label class="field-label" for="ciaCustomVersion" style="margin-top:0;">Versión TMD personalizada (opcional)</label>
-                  <input id="ciaCustomVersion" type="text" placeholder="Automático (V.1.1.2 o +1 sobre origen)" autocomplete="off" />
+                  <input id="ciaCustomVersion" type="text" placeholder="Automático (V.1.2.0 o +1 sobre origen)" autocomplete="off" />
                 </div>
                 <div style="display:flex;align-items:flex-end;">
                   <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:0.82rem;padding-bottom:6px;">
@@ -272,10 +272,27 @@
               <label><input type="checkbox" id="skInitial" checked /> Supertécnicas iniciales</label>
               <label><input type="checkbox" id="skLearnset" checked /> Supertécnicas aprendidas por nivel</label>
               <label><input type="checkbox" id="skTalents" checked /> Talentos pasivos</label>
-              <label><input type="checkbox" id="skAvatar" checked /> Habilidades de Espíritus Guerreros (<code>wk*</code>)</label>
+              <label><input type="checkbox" id="skAvatar" checked /> Talentos y parámetros de Espíritus Guerreros (preservando esqueleto 3D)</label>
+              <label><input type="checkbox" id="skGuaranteeAll" checked /> <strong>1 Técnica activa Nv.1 o EG inicial garantizado en todos los jugadores</strong></label>
+              <label><input type="checkbox" id="skGuaranteeProta" checked /> <strong>Arion (Protagonista) siempre empieza con 1 técnica activa Nv.1 garantizada</strong></label>
+              <label><input type="checkbox" id="skDynamicStory" checked /> <strong>Intercambio dinámico de técnicas de historia en scripts <code>.nutb</code> (100% random sin técnicas fijas)</strong></label>
               <label><input type="checkbox" id="skCompat" checked /> Compatibilidad con posición del jugador</label>
               <label><input type="checkbox" id="skUsableTp" checked /> Garantizar PT suficientes para usar técnicas iniciales (Nv.1)</label>
               <label><input type="checkbox" id="skParams" /> Variar coste de PT, potencia y elemento de supertécnicas</label>
+            </div>
+          </div>
+
+          <!-- F. Coaches, Managers & NPCs -->
+          <div class="subsystem-box">
+            <label class="subsystem-title">
+              <input type="checkbox" id="npcsEnabled" checked />
+              <span>👔 F. Entrenadores, Gerentes y NPCs</span>
+            </label>
+            <div class="subsystem-options" id="npcsGroup">
+              <label><input type="checkbox" id="npcCoaches" checked /> Entrenadores (perfiles de mejora, textos en español y reclutamiento de historia)</label>
+              <label><input type="checkbox" id="npcManagers" checked /> Gerentes del Raimon (Skie, Jade, Rosie y Celia con retrato y modelo 3D compatible)</label>
+              <label><input type="checkbox" id="npcStory" checked /> NPCs que intervienen en la historia y cinemáticas (respetando esqueleto corporal)</label>
+              <label><input type="checkbox" id="npcMaps" checked /> NPCs humanos del mapa (<code>.npc.bin</code>, protegiendo animales y props)</label>
             </div>
           </div>
 

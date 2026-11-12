@@ -56,6 +56,17 @@ namespace IEGORandomizer.Engine.Protection
         public NutbAuditReport NutbAudit { get; set; } = new();
         public int CuratedProtectedPlayersCount { get; set; }
 
+        /// <summary>
+        /// Dynamic Story-Technique Swap map populated by <c>SkillRandomizerModule</c>:
+        /// maps <c>(para_cpXXXX, vanillaSkillCode)</c> -&gt; <c>randomizedSkillCode</c> for <c>.nutb</c> call-site patching.
+        /// </summary>
+        public Dictionary<(string ParamId, string VanillaSkillId), string> StorySkillSlotRemaps { get; } = new();
+
+        /// <summary>
+        /// Maps coach/director item literals <c>"iimXXXX"</c> -&gt; <c>"iimYYYY"</c> for <c>CMND_ADD_SET_DIRECTOR</c> / <c>CMND_SET_DIRECTOR</c>.
+        /// </summary>
+        public Dictionary<string, string> StoryDirectorRemaps { get; } = new(StringComparer.OrdinalIgnoreCase);
+
         public bool IsProtectedItem(int itemId) => itemId != 0 && ProtectedItemHashes.Contains(itemId);
     }
 
@@ -238,6 +249,21 @@ namespace IEGORandomizer.Engine.Protection
                     }
                 }
 
+                // Ensure any script-protected character who bears a vanilla Fighting Spirit keeps a valid spirit too
+                if (options.EnableStorySoftlockProtection)
+                {
+                    var allCharaParams = game.GetCharaparams() ?? Array.Empty<ICharaparam>();
+                    foreach (var cp in allCharaParams)
+                    {
+                        if (cp.ParamHash != 0 &&
+                            cp.FightingSpiritHash != 0 &&
+                            ctx.ProtectedStoryPlayerParamHashes.Contains(cp.ParamHash))
+                        {
+                            ctx.ProtectedAvatarBearerParamHashes.Add(cp.ParamHash);
+                        }
+                    }
+                }
+
                 foreach (string skillCode in nutb.ReferencedSkillIds)
                 {
                     ctx.ScriptReferencedSkillHashes.Add(Level5IdHelper.ComputeCrc32Utf8(skillCode));
@@ -286,12 +312,17 @@ namespace IEGORandomizer.Engine.Protection
                         continue;
 
                     int raimonMembers = 0;
+                    int activeMembers = 0;
                     for (int slot = 1; slot <= 16; slot++)
                     {
                         int pHash = TeamSlotAccessor.GetStoryPlayer(st, slot);
-                        if (pHash != 0 && raimonCoreParams.Contains(pHash))
+                        if (pHash != 0)
                         {
-                            raimonMembers++;
+                            activeMembers++;
+                            if (raimonCoreParams.Contains(pHash))
+                            {
+                                raimonMembers++;
+                            }
                         }
                     }
 
@@ -299,29 +330,76 @@ namespace IEGORandomizer.Engine.Protection
                     {
                         ctx.RaimonCoreTeamConfigHashes.Add(st.TeamConfigID);
                     }
+
+                    // Protect 1v1 / 2v2 / 3v3 / 4v4 Story Duels & Drills (such as Chapter 1 btl0302 Arion vs Victor,
+                    // which has only 1 active player slot and special 1v1 formation ifb0302!)
+                    if (activeMembers > 0 && activeMembers < 5)
+                    {
+                        ctx.ScriptedTeamConfigHashes.Add(st.TeamConfigID);
+                    }
                 }
 
-                if (_extraProtectedMatchCodes.Count > 0)
+                // Protect all btl03XX story duel/drill matches and any TeamParam using an ifb03XX story-drill formation,
+                // plus any explicit manual match overrides (_extraProtectedMatchCodes).
+                var protectedDrillMatchHashes = new HashSet<int>(
+                    _extraProtectedMatchCodes.Select(m => Level5IdHelper.ComputeCrc32Utf8(m.ToLowerInvariant())));
+                for (int drillIdx = 300; drillIdx <= 399; drillIdx++)
                 {
-                    var manualMatchHashes = new HashSet<int>(
-                        _extraProtectedMatchCodes.Select(m => Level5IdHelper.ComputeCrc32Utf8(m.ToLowerInvariant())));
-                    var soccers = game.GetSoccers() ?? Array.Empty<ISoccerInfo>();
-                    var teamParams = game.GetTeamParams() ?? Array.Empty<ITeamParamInfo>();
-                    var paramById = teamParams
-                        .Where(tp => tp.TeamParamID != 0)
-                        .GroupBy(tp => tp.TeamParamID)
-                        .ToDictionary(g => g.Key, g => g.First());
+                    protectedDrillMatchHashes.Add(Level5IdHelper.ComputeCrc32Utf8($"btl{drillIdx:D4}"));
+                }
 
-                    foreach (var soccer in soccers)
+                var drillFormationHashes = new HashSet<int>();
+                for (int drillForm = 300; drillForm <= 399; drillForm++)
+                {
+                    drillFormationHashes.Add(Level5IdHelper.ComputeCrc32Utf8($"ifb{drillForm:D4}"));
+                }
+
+                var soccers = game.GetSoccers() ?? Array.Empty<ISoccerInfo>();
+                var teamParams = game.GetTeamParams() ?? Array.Empty<ITeamParamInfo>();
+                var paramById = teamParams
+                    .Where(tp => tp.TeamParamID != 0)
+                    .GroupBy(tp => tp.TeamParamID)
+                    .ToDictionary(g => g.Key, g => g.First());
+
+                foreach (var tp in teamParams)
+                {
+                    if (tp.TeamParamID == 0)
+                        continue;
+
+                    if ((tp.FormationID != 0 && drillFormationHashes.Contains(tp.FormationID)) ||
+                        (tp.TeamConfigID != 0 && ctx.ScriptedTeamConfigHashes.Contains(tp.TeamConfigID)))
                     {
-                        if (manualMatchHashes.Contains(soccer.SoccerID) && soccer.TeamParamID != 0)
+                        ctx.ScriptedTeamParamHashes.Add(tp.TeamParamID);
+                        if (tp.TeamConfigID != 0)
                         {
-                            ctx.ScriptedTeamParamHashes.Add(soccer.TeamParamID);
-                            if (paramById.TryGetValue(soccer.TeamParamID, out var tp) && tp.TeamConfigID != 0)
-                            {
-                                ctx.ScriptedTeamConfigHashes.Add(tp.TeamConfigID);
-                            }
+                            ctx.ScriptedTeamConfigHashes.Add(tp.TeamConfigID);
                         }
+                    }
+                }
+
+                foreach (var soccer in soccers)
+                {
+                    if (protectedDrillMatchHashes.Contains(soccer.SoccerID) && soccer.TeamParamID != 0)
+                    {
+                        ctx.ScriptedTeamParamHashes.Add(soccer.TeamParamID);
+                        if (paramById.TryGetValue(soccer.TeamParamID, out var tp) && tp.TeamConfigID != 0)
+                        {
+                            ctx.ScriptedTeamConfigHashes.Add(tp.TeamConfigID);
+                        }
+                    }
+                }
+
+                // Preserve vanilla Fighting Spirits on all protected story players who already bear a spirit
+                // (e.g. Riccardo ck0003, Victor ck0002, Almighty Faith para_cp0086 ck0012, story bosses),
+                // AND keep cp0005 (JP) & cp0008 (Arion) at FightingSpiritHash == 0 until RunAttachAvatar!
+                var charaParams = game.GetCharaparams() ?? Array.Empty<ICharaparam>();
+                foreach (var cp in charaParams)
+                {
+                    if (cp.ParamHash != 0 &&
+                        cp.FightingSpiritHash != 0 &&
+                        ctx.ProtectedStoryPlayerParamHashes.Contains(cp.ParamHash))
+                    {
+                        ctx.ProtectedAvatarBearerParamHashes.Add(cp.ParamHash);
                     }
                 }
             }

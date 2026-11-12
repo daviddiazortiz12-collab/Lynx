@@ -237,6 +237,27 @@ namespace IEGORandomizer.Engine.Modules
 
                                     if (candidateParam != 0)
                                     {
+                                        // When spawn.Record.Uniform == 0 (street-clothes / school-uniform pachanga),
+                                        // preserve exact (Body, Gender) rig compatibility when available!
+                                        if (spawn.Record.Uniform == 0 &&
+                                            baseByHash.TryGetValue(paramByHash[origId].BaseHash, out var origCb) &&
+                                            paramByHash.TryGetValue(candidateParam, out var candCp) &&
+                                            baseByHash.TryGetValue(candCp.BaseHash, out var candCb) &&
+                                            (candCb.Body != origCb.Body || candCb.Gender != origCb.Gender))
+                                        {
+                                            var sameRigPool = swappableParams
+                                                .Where(p => p.ParamHash != origId &&
+                                                            !usedBasesInSpawn.Contains(p.BaseHash) &&
+                                                            baseByHash.TryGetValue(p.BaseHash, out var cb) &&
+                                                            cb.Body == origCb.Body &&
+                                                            cb.Gender == origCb.Gender)
+                                                .ToList();
+                                            if (sameRigPool.Count > 0)
+                                            {
+                                                candidateParam = dedupRng.PickOne(sameRigPool).ParamHash;
+                                            }
+                                        }
+
                                         candidateParam = EnsureUniqueTeamPlayer(
                                             origId,
                                             candidateParam,
@@ -442,20 +463,11 @@ namespace IEGORandomizer.Engine.Modules
                     if (!visualProfile.CoherentPlayableParamHashes.Contains(cp.ParamHash))
                         continue;
 
-                    // Story protagonists whose Fighting Spirits are scripted in story matches:
-                    // NEVER strip their Fighting Spirit to 0, and preserve exact avatar if script-referenced!
+                    // Story protagonists & bosses whose Fighting Spirits are scripted in story matches:
+                    // - Keep Arion (cp0008) & JP (cp0005) at FightingSpiritHash == 0 until RunAttachAvatar awakens them!
+                    // - Preserve exact vanilla spirit on protected story bearers (Victor ck0002, Riccardo ck0003, bosses)!
                     if (protection.ProtectedAvatarBearerParamHashes.Contains(cp.ParamHash))
                     {
-                        if (cp.FightingSpiritHash != 0 &&
-                            protection.ScriptReferencedAvatarHashes.Contains(cp.FightingSpiritHash))
-                        {
-                            continue;
-                        }
-
-                        int assigned = avatarRng.PickOne(avatarPool);
-                        cp.FightingSpiritHash = assigned;
-                        cp.FightingSpiritMatchkHash = assigned;
-                        report.RandomizedPlayerAvatarsCount++;
                         continue;
                     }
 

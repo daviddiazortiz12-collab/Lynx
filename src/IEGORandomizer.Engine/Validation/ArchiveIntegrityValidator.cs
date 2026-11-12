@@ -20,6 +20,7 @@ namespace IEGORandomizer.Engine.Validation
         public Dictionary<(string Path, int NodeIdx), (int Light, int Shadow)> ProtectedMapChests { get; } = new();
         public Dictionary<(string RouteFile, int CellNum), int> ProtectedRouteCells { get; } = new();
         public Dictionary<(int TeamParamId, int Slot), int> ProtectedTeamDrops { get; } = new();
+        public Dictionary<int, int> ProtectedAvatarSpecialMoves { get; } = new();
         public HashSet<string> PreExistingVanillaAnomalies { get; } = new(StringComparer.Ordinal);
     }
 
@@ -84,6 +85,14 @@ namespace IEGORandomizer.Engine.Validation
                     {
                         baseline.ProtectedTeamDrops[(tp.TeamParamID, s)] = dropId;
                     }
+                }
+            }
+
+            foreach (var av in game.GetAvatars(false) ?? Array.Empty<IAvatar>())
+            {
+                if (av.AvatarHash != 0 && av.SpecialMoveID != 0)
+                {
+                    baseline.ProtectedAvatarSpecialMoves[av.AvatarHash] = av.SpecialMoveID;
                 }
             }
 
@@ -213,6 +222,21 @@ namespace IEGORandomizer.Engine.Validation
                 result.ChecksPassed.Add(
                     $"Verificada preservación íntegra de objetos clave ({baseline.ProtectedMapChests.Count} cofres de mapa, " +
                     $"{baseline.ProtectedRouteCells.Count} cofres de cadena, {baseline.ProtectedTeamDrops.Count} drops protegidos).");
+
+                var avByHash = (game.GetAvatars(false) ?? Array.Empty<IAvatar>())
+                    .Where(a => a.AvatarHash != 0)
+                    .GroupBy(a => a.AvatarHash)
+                    .ToDictionary(g => g.Key, g => g.First());
+                foreach (var kvp in baseline.ProtectedAvatarSpecialMoves)
+                {
+                    if (!avByHash.TryGetValue(kvp.Key, out var av) || av.SpecialMoveID != kvp.Value)
+                    {
+                        result.Errors.Add(
+                            $"Espíritu Guerrero 0x{kvp.Key:X8} perdió su SpecialMoveID esquelético original (esperado 0x{kvp.Value:X8}).");
+                    }
+                }
+                result.ChecksPassed.Add(
+                    $"Verificada coherencia esquelética 1-a-1 (vkaNNNN_ckNNNN.xc) en {baseline.ProtectedAvatarSpecialMoves.Count} Espíritus Guerreros.");
             }
 
             return result;
@@ -305,6 +329,8 @@ namespace IEGORandomizer.Engine.Validation
                 soccers.Where(s => s != null && s.SoccerMode == 2 && s.TeamParamID != 0).Select(s => s.TeamParamID));
             var ifaLookup = Lynx.Core.RomFs.Level5IdHelper.BuildPrefixLookup("ifa");
             var ifbLookup = Lynx.Core.RomFs.Level5IdHelper.BuildPrefixLookup("ifb");
+            var drillIfbHashes = new HashSet<int>(
+                Enumerable.Range(300, 100).Select(n => Lynx.Core.RomFs.Level5IdHelper.ComputeCrc32Utf8($"ifb{n:D4}")));
 
             foreach (var tp in teamParams)
             {
@@ -318,11 +344,21 @@ namespace IEGORandomizer.Engine.Validation
                     miniBattleParamIds,
                     fullMatchParamIds);
 
+                if (tp.Uniform >= VisualCoherenceValidator.MaxStandardSoccerKitNumberExclusive * 1000)
+                {
+                    sink.Add($"TeamParam 0x{tp.TeamParamID:X8} usa Uniform especial >= 900000 ({tp.Uniform}).");
+                }
+
                 if (tp.FormationID != 0)
                 {
                     if (itemById.TryGetValue(tp.FormationID, out var fItem) && fItem.ItemCategory == 17)
                     {
                         sink.Add($"TeamParam 0x{tp.TeamParamID:X8} tiene objeto PalPack (Cat.17) 0x{tp.FormationID:X8} como Formación.");
+                    }
+
+                    if (isPachanga && drillIfbHashes.Contains(tp.FormationID))
+                    {
+                        sink.Add($"Pachanga 5v5 TeamParam 0x{tp.TeamParamID:X8} tiene Formación de duelo 1v1/2v2 (ifb03XX) 0x{tp.FormationID:X8} (causa crash en btl_manager).");
                     }
 
                     if (isPachanga && (ifaLookup.ContainsKey(tp.FormationID) ||
@@ -331,6 +367,7 @@ namespace IEGORandomizer.Engine.Validation
                         sink.Add($"Pachanga 5v5 TeamParam 0x{tp.TeamParamID:X8} tiene Formación 11v11 (ifa/Cat.19) 0x{tp.FormationID:X8} (causa cuelgue en btl_manager).");
                     }
                     else if (!isPachanga && storyIds.Contains(tp.TeamConfigID) &&
+                             !protectionSafeDrillCheck(tp, drillIfbHashes) &&
                              (ifbLookup.ContainsKey(tp.FormationID) ||
                               (itemById.TryGetValue(tp.FormationID, out var bfItem) && bfItem.ItemCategory == 20)))
                     {
@@ -357,6 +394,25 @@ namespace IEGORandomizer.Engine.Validation
                     }
                 }
             }
+
+            // Verify overworld NPC_BASE (*.npc.bin) HeadID referential validity
+            var validTypeAndHead = new HashSet<(int Type, int HeadId)>(
+                charaBases.Where(cb => cb.CharaBaseType > 0 && cb.ModelNumber > 0)
+                          .Select(cb => (cb.CharaBaseType, cb.ModelNumber)));
+            foreach (var npc in MapDataService.LoadAllMapNpcBases(game.IE_A.Directory))
+            {
+                if (npc.Record.HeadId > 0 &&
+                    (npc.Record.Type == 1 || npc.Record.Type == 3) &&
+                    !validTypeAndHead.Contains((npc.Record.Type, npc.Record.HeadId)))
+                {
+                    sink.Add($"NPC_BASE {npc.VirtualFilePath} [#{npc.NodeIndex}] referencia (Type={npc.Record.Type}, HeadId={npc.Record.HeadId}) inexistente.");
+                }
+            }
+        }
+
+        private static bool protectionSafeDrillCheck(ITeamParamInfo tp, HashSet<int> drillIfbHashes)
+        {
+            return tp != null && tp.FormationID != 0 && drillIfbHashes.Contains(tp.FormationID);
         }
     }
 }

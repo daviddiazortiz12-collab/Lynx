@@ -25,6 +25,8 @@ namespace Lynx.Core.Scripts
         public HashSet<string> ReferencedTeamIds { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> ReferencedItemIds { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<int> IntegerLiterals { get; } = new();
+        public List<NutbSkillCallSiteRecord> SkillCallSites { get; } = new();
+        public HashSet<string> StoryDirectorItemIds { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -116,6 +118,12 @@ namespace Lynx.Core.Scripts
                 {
                     report.ReferencedBattleCharacterIds.Add(tok);
                 }
+            }
+
+            // Perform full Squirrel 2.2.x / 3.x SQFunctionProto instruction call-site analysis when valid
+            if (NutbBytecodeCodec.TryParse(rawBytes, out NutbStream parsedStream))
+            {
+                NutbBytecodeCodec.AnalyzeFunctionTree(parsedStream.MainFunction, virtualPath, report);
             }
         }
 

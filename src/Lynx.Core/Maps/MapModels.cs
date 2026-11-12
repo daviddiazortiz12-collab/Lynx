@@ -80,6 +80,31 @@ namespace Lynx.Core.Maps
     }
 
     /// <summary>
+    /// Map NPC appearance/head/kit definition (<c>NPC_BASE</c> inside <c>*.npc.bin</c>).
+    /// Note: <c>Type == 1</c> = Player/Manager (<c>cp</c>), <c>Type == 3</c> = Human NPC/Coach (<c>cn</c>),
+    /// <c>Type == 4</c> = Animal/Prop/Special (<c>ca</c> — never randomize!).
+    /// </summary>
+    public sealed class MapNpcBaseRecord
+    {
+        public int NpcId { get; set; }
+        public int HeadId { get; set; }
+        public int Type { get; set; }
+        public int UniformId { get; set; }
+        public int BootsId { get; set; }
+        public int GlovesId { get; set; }
+        public int IconId { get; set; }
+    }
+
+    public sealed class MapNpcBaseEntry
+    {
+        public string MapId { get; init; } = string.Empty;
+        public string VirtualFilePath { get; init; } = string.Empty;
+        public string EntryName { get; init; } = string.Empty;
+        public int NodeIndex { get; init; }
+        public MapNpcBaseRecord Record { get; init; } = new MapNpcBaseRecord();
+    }
+
+    /// <summary>
     /// Dependencies discovered in map <c>*_funcpt.bin</c> and <c>*.talk.bin</c> files that gate progression.
     /// Preserves both CRC32/numeric IDs and textual Level-5 identifiers (such as <c>"scr_br_0005_s"</c>)
     /// without lossy or arbitrary conversions.

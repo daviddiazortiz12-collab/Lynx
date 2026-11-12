@@ -37,9 +37,19 @@ namespace IEGORandomizer.Engine.Modules
         public int RandomizedSkillSlotsCount { get; set; }
         public int RandomizedAvatarSkillsCount { get; set; }
         public int RandomizedSkillParamsCount { get; set; }
+        public int GuaranteedInitialStarterCount { get; set; }
+        public int DynamicStorySkillMappingsCount { get; set; }
+        public int PatchedNutbScriptsCount { get; set; }
+        public int PatchedNutbSkillCallSitesCount { get; set; }
+        public int InjectedTemporaryBattleSkillNodesCount { get; set; }
 
         public int RandomizedTeamsCount { get; set; }
         public int RandomizedPachangaTeamsCount { get; set; }
+
+        public int RandomizedCoachesCount { get; set; }
+        public int RandomizedManagersCount { get; set; }
+        public int RandomizedStoryNpcsCount { get; set; }
+        public int RandomizedOverworldMapNpcsCount { get; set; }
 
         public int RandomizedOverworldChestsCount { get; set; }
         public int ProtectedOverworldChestsSkipped { get; set; }

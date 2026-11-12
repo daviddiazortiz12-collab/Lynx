@@ -18,6 +18,8 @@ namespace IEGORandomizer.Engine.Validation
     {
         public HashSet<int> CoherentPlayableParamHashes { get; } = new();
         public HashSet<int> CoherentPlayableBaseHashes { get; } = new();
+        public HashSet<int> CoherentStandEventNpcBaseHashes { get; } = new();
+        public HashSet<int> ValidOverworldNpcModelNumbers { get; } = new();
         public HashSet<int> ValidKitNumbers { get; } = new();
         public HashSet<int> ValidGoalkeeperKitNumbers { get; } = new();
         public HashSet<int> ValidAwayKitNumbers { get; } = new();
@@ -34,6 +36,18 @@ namespace IEGORandomizer.Engine.Validation
         /// </summary>
         public const int MaxEngineModelNumberExclusive = 2048;
 
+        /// <summary>
+        /// Kits &gt;= 900 (<c>901</c> street clothes, <c>903</c> Black Knights hoodie, <c>950</c> pajamas) are special
+        /// cutscene/event outfits without standard shirt-number atlases or GK pairs and must never enter random kit pools.
+        /// </summary>
+        public const int MaxStandardSoccerKitNumberExclusive = 900;
+
+        /// <summary>
+        /// Story NPCs with bespoke non-standard skeletons in <c>SetHiMdlPosAndMotID</c> (<c>cn0013</c> Goldwin,
+        /// <c>cn0015</c> Hillman, <c>cn0019</c> Vladimir Blade in wheelchair, <c>cn0045</c> Chester Horse Sr).
+        /// </summary>
+        private static readonly HashSet<int> SpecialRigNpcModelNumbers = new() { 13, 15, 19, 45 };
+
         public static VisualCoherenceProfile AnalyzeArchive(SafeGOGame game)
         {
             if (game == null)
@@ -45,14 +59,22 @@ namespace IEGORandomizer.Engine.Validation
             bool hasBustupDir = root.IsFolderExists("/data/bustup/face");
             bool hasRpgFaceDir = root.IsFolderExists("/data/chr/model/rpg/face");
             bool hasWazaFaceDir = root.IsFolderExists("/data/chr/model/waza/face");
+            bool hasRpgNpcDir = root.IsFolderExists("/data/chr/model/rpg/npc");
+            bool hasWazaNpcDir = root.IsFolderExists("/data/chr/model/waza/npc");
             bool hasBodyDir = root.IsFolderExists("/data/chr/model/rpg/body");
+            bool hasWazaBodyDir = root.IsFolderExists("/data/chr/model/waza/body");
             bool hasAvatarBustupDir = root.IsFolderExists("/data/bustup/avatar");
+            bool hasWazaAvatarDir = root.IsFolderExists("/data/chr/model/waza/avatar");
 
             VirtualDirectory bustupDir = hasBustupDir ? root.GetFolderFromFullPath("/data/bustup/face") : null;
             VirtualDirectory rpgFaceDir = hasRpgFaceDir ? root.GetFolderFromFullPath("/data/chr/model/rpg/face") : null;
             VirtualDirectory wazaFaceDir = hasWazaFaceDir ? root.GetFolderFromFullPath("/data/chr/model/waza/face") : null;
+            VirtualDirectory rpgNpcDir = hasRpgNpcDir ? root.GetFolderFromFullPath("/data/chr/model/rpg/npc") : null;
+            VirtualDirectory wazaNpcDir = hasWazaNpcDir ? root.GetFolderFromFullPath("/data/chr/model/waza/npc") : null;
             VirtualDirectory bodyDir = hasBodyDir ? root.GetFolderFromFullPath("/data/chr/model/rpg/body") : null;
+            VirtualDirectory wazaBodyDir = hasWazaBodyDir ? root.GetFolderFromFullPath("/data/chr/model/waza/body") : null;
             VirtualDirectory avatarBustupDir = hasAvatarBustupDir ? root.GetFolderFromFullPath("/data/bustup/avatar") : null;
+            VirtualDirectory wazaAvatarDir = hasWazaAvatarDir ? root.GetFolderFromFullPath("/data/chr/model/waza/avatar") : null;
 
             var charaBases = game.GetCharabase() ?? Array.Empty<ICharabase>();
             var charaParams = game.GetCharaparams() ?? Array.Empty<ICharaparam>();
@@ -83,13 +105,46 @@ namespace IEGORandomizer.Engine.Validation
                 profile.CoherentPlayableBaseHashes.Add(cb.BaseHash);
             }
 
-            // Validate Uniform Kit Numbers (iiuXXXX <-> uzaXXXX.xc [Home], uzbXXXX.xc [GK Home], uzcXXXX.xc [Away], uzdXXXX.xc [GK Away])
+            // Validate Human Story/Coach/Advisor NPCs (CharaBaseType == 3, "cnXXXX") — strictly excluding
+            // Animals/Props (CharaBaseType == 4, "caXXXX") and bespoke wheelchair/special skeletons!
+            foreach (var cb in charaBases)
+            {
+                if (cb.BaseHash == 0 || cb.CharaBaseType != 3 ||
+                    cb.ModelNumber <= 0 || cb.ModelNumber >= MaxEngineModelNumberExclusive ||
+                    SpecialRigNpcModelNumbers.Contains(cb.ModelNumber))
+                {
+                    continue;
+                }
+
+                string cnCode = $"cn{cb.ModelNumber:D4}";
+                bool hasRpgNpc = rpgNpcDir == null || rpgNpcDir.Files.Count == 0 || HasAnyPrefixFile(rpgNpcDir, cnCode);
+                if (!hasRpgNpc)
+                    continue;
+
+                if (cb.ModelNumber >= 1001 && cb.ModelNumber < 2000)
+                {
+                    profile.ValidOverworldNpcModelNumbers.Add(cb.ModelNumber);
+                }
+
+                // StandEvent story NPCs & Coaches require valid talk Body (1..8), bustup portrait, RPG model, and Waza high-poly model
+                if (cb.ModelNumber >= 1 && cb.ModelNumber <= 99 && cb.Body >= 1 && cb.Body <= 8)
+                {
+                    bool hasBust = bustupDir == null || bustupDir.Files.Count == 0 || HasAnyPrefixFile(bustupDir, cnCode);
+                    bool hasWazaNpc = wazaNpcDir == null || wazaNpcDir.Files.Count == 0 || HasAnyPrefixFile(wazaNpcDir, cnCode);
+                    if (hasBust && hasWazaNpc)
+                    {
+                        profile.CoherentStandEventNpcBaseHashes.Add(cb.BaseHash);
+                    }
+                }
+            }
+
+            // Validate Uniform Kit Numbers (< 900; iiuXXXX <-> uzaXXXX.xc [Home], uzbXXXX.xc [GK Home], uzcXXXX.xc [Away], uzdXXXX.xc [GK Away])
             var uniforms = game.GetItems("uniform") ?? Array.Empty<IItemConfig>();
             var candidateKitNums = new HashSet<int>();
             foreach (var item in uniforms)
             {
                 int kitNum = ExtractUniformNumber(item);
-                if (kitNum > 0)
+                if (kitNum > 0 && kitNum < MaxStandardSoccerKitNumberExclusive)
                     candidateKitNums.Add(kitNum);
             }
 
@@ -102,7 +157,8 @@ namespace IEGORandomizer.Engine.Validation
                         !string.Equals(fileName, "uzatest.xc", StringComparison.OrdinalIgnoreCase))
                     {
                         string digits = fileName.Substring(3, fileName.Length - 6);
-                        if (int.TryParse(digits, NumberStyles.Integer, CultureInfo.InvariantCulture, out int modelKitNum) && modelKitNum > 0)
+                        if (int.TryParse(digits, NumberStyles.Integer, CultureInfo.InvariantCulture, out int modelKitNum) &&
+                            modelKitNum > 0 && modelKitNum < MaxStandardSoccerKitNumberExclusive)
                         {
                             candidateKitNums.Add(modelKitNum);
                         }
@@ -110,22 +166,31 @@ namespace IEGORandomizer.Engine.Validation
                 }
             }
 
+            bool checkWazaBody = wazaBodyDir != null && wazaBodyDir.Files.Count > 0;
+
             foreach (int kitNum in candidateKitNums.OrderBy(x => x))
             {
+                if (kitNum <= 0 || kitNum >= MaxStandardSoccerKitNumberExclusive)
+                    continue;
+
                 if (bodyDir != null && bodyDir.Files.Count > 0)
                 {
                     string numStr = kitNum.ToString("D4", CultureInfo.InvariantCulture);
-                    bool hasHome = bodyDir.Files.ContainsKey($"uza{numStr}.xc");
+                    bool hasHome = bodyDir.Files.ContainsKey($"uza{numStr}.xc") &&
+                                   (!checkWazaBody || wazaBodyDir.Files.ContainsKey($"uza{numStr}.xc"));
                     if (!hasHome)
                     {
                         profile.QuarantinedEntityWarnings.Add(
-                            $"Equipación #{numStr} excluida: falta modelo 3D base uza{numStr}.xc.");
+                            $"Equipación #{numStr} excluida: falta modelo 3D RPG/Waza uza{numStr}.xc.");
                         continue;
                     }
 
-                    bool hasGkHome = bodyDir.Files.ContainsKey($"uzb{numStr}.xc");
-                    bool hasAway = bodyDir.Files.ContainsKey($"uzc{numStr}.xc");
-                    bool hasGkAway = bodyDir.Files.ContainsKey($"uzd{numStr}.xc");
+                    bool hasGkHome = bodyDir.Files.ContainsKey($"uzb{numStr}.xc") &&
+                                     (!checkWazaBody || wazaBodyDir.Files.ContainsKey($"uzb{numStr}.xc"));
+                    bool hasAway = bodyDir.Files.ContainsKey($"uzc{numStr}.xc") &&
+                                   (!checkWazaBody || wazaBodyDir.Files.ContainsKey($"uzc{numStr}.xc"));
+                    bool hasGkAway = bodyDir.Files.ContainsKey($"uzd{numStr}.xc") &&
+                                     (!checkWazaBody || wazaBodyDir.Files.ContainsKey($"uzd{numStr}.xc"));
 
                     profile.ValidKitNumbers.Add(kitNum);
                     if (hasGkHome)
@@ -144,22 +209,31 @@ namespace IEGORandomizer.Engine.Validation
                 }
             }
 
-            // Validate Fighting Spirits (Avatars)
+            // Validate Fighting Spirits (Avatars): must have SpecialMoveID != 0, positive FSP, portrait, and Waza 3D mesh
             var avatars = game.GetAvatars(false) ?? Array.Empty<IAvatar>();
+            bool checkWazaAvatar = wazaAvatarDir != null && wazaAvatarDir.Files.Count > 0;
             foreach (var av in avatars)
             {
-                if (av.AvatarHash == 0 || av.AvatarNumber <= 0)
+                if (av.AvatarHash == 0 || av.AvatarNumber <= 0 || av.SpecialMoveID == 0 || av.FightingSpiritPoint <= 0)
                     continue;
 
+                string ckPrefix = $"ck{av.AvatarNumber:D4}";
                 if (avatarBustupDir != null && avatarBustupDir.Files.Count > 0)
                 {
-                    string expectedBustup = $"ck{av.AvatarNumber:D4}a.xi";
+                    string expectedBustup = $"{ckPrefix}a.xi";
                     if (!avatarBustupDir.Files.ContainsKey(expectedBustup))
                     {
                         profile.QuarantinedEntityWarnings.Add(
-                            $"Espíritu Guerrero ck{av.AvatarNumber:D4} excluido: falta retrato {expectedBustup}.");
+                            $"Espíritu Guerrero {ckPrefix} excluido: falta retrato {expectedBustup}.");
                         continue;
                     }
+                }
+
+                if (checkWazaAvatar && !HasAnyPrefixFile(wazaAvatarDir, ckPrefix))
+                {
+                    profile.QuarantinedEntityWarnings.Add(
+                        $"Espíritu Guerrero {ckPrefix} excluido: falta modelo 3D en /data/chr/model/waza/avatar/.");
+                    continue;
                 }
 
                 profile.ValidAvatarHashes.Add(av.AvatarHash);

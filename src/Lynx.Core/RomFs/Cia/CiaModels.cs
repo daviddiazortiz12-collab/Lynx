@@ -79,11 +79,11 @@ namespace Lynx.Core.RomFs.Cia
         }
 
         /// <summary>
-        /// Default FBI in-place update revision (V.1.1.2 = (1 &lt;&lt; 10) | (1 &lt;&lt; 4) | 2 = 1042 = 0x0412).
+        /// Default FBI in-place update revision (V.1.2.0 = (1 &lt;&lt; 10) | (2 &lt;&lt; 4) | 0 = 1056 = 0x0420, strictly &gt; V.1.1.2 = 1042).
         /// Installing a .cia with the same base TitleID (e.g. 0004000000112F00) and a higher TMD TitleVersion
         /// in FBI updates title/00040000/&lt;TitleID_Low&gt;/content/ in place without deleting data/00000001.sav.
         /// </summary>
-        public const ushort DefaultFbiUpdateTitleVersionRaw = (1 << 10) | (1 << 4) | 2; // 1042 (V.1.1.2)
+        public const ushort DefaultFbiUpdateTitleVersionRaw = (1 << 10) | (2 << 4) | 0; // 1056 (V.1.2.0)
 
         public static ushort EncodeTitleVersion(int major, int minor, int micro)
         {

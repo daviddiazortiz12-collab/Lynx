@@ -26,6 +26,7 @@ namespace IEGORandomizer.Engine.Configuration
         public PlayersRandomizerOptions Players { get; set; } = new();
         public SkillsRandomizerOptions Skills { get; set; } = new();
         public TeamsRandomizerOptions Teams { get; set; } = new();
+        public NpcsRandomizerOptions Npcs { get; set; } = new();
         public RewardsRandomizerOptions Rewards { get; set; } = new();
         public UniformsRandomizerOptions Uniforms { get; set; } = new();
         public ProtectionRandomizerOptions Protection { get; set; } = new();
@@ -61,6 +62,18 @@ namespace IEGORandomizer.Engine.Configuration
         public int SkillParamVariancePercent { get; set; } = 20;
         public bool EnforcePositionCompatibility { get; set; } = true;
         public bool EnsureUsableInitialTp { get; set; } = true;
+        public bool GuaranteeInitialMoveOrSpiritForAllPlayers { get; set; } = true;
+        public bool GuaranteeProtagonistInitialSkill { get; set; } = true;
+        public bool EnableDynamicStoryTechniqueSwap { get; set; } = true;
+    }
+
+    public sealed class NpcsRandomizerOptions
+    {
+        public bool Enabled { get; set; } = true;
+        public bool RandomizeCoaches { get; set; } = true;
+        public bool RandomizeManagers { get; set; } = true;
+        public bool RandomizeStoryNpcs { get; set; } = true;
+        public bool RandomizeOverworldMapNpcs { get; set; } = true;
     }
 
     public sealed class TeamsRandomizerOptions
