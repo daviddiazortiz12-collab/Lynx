@@ -1,5 +1,8 @@
 name: Verify 2DS with real game inputs (no release)
 on:
+  push:
+    branches: [arena/799dcf14-lynx]
+    paths: ['.github/workflows/verify-2ds-real.yml']
   workflow_dispatch:
 permissions:
   contents: read
