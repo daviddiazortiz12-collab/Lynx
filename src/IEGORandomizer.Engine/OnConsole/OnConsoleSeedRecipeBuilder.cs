@@ -236,18 +236,29 @@ namespace IEGORandomizer.Engine.OnConsole
                             continue;
                         }
 
-                        int instBust = FindInstalledSlotForCleanAsset(bustArcIdx);
-                        int instRpg = FindInstalledSlotForCleanAsset(rpgArcIdx);
-                        int instWaza = FindInstalledSlotForCleanAsset(wazaArcIdx);
-                        if (instBust < 0 || instRpg < 0 || instWaza < 0)
-                            continue;
-
                         if (!cbVarIdxMap.ContainsKey((rowIdx, 2)) || !cbVarIdxMap.ContainsKey((rowIdx, 11)))
                             continue;
 
                         byte[] bBytes = ReadBytes(cleanFs, cleanArc.Slots[bustArcIdx].AbsoluteOffset, checked((int)cleanArc.Slots[bustArcIdx].FileSize));
                         byte[] rBytes = ReadBytes(cleanFs, cleanArc.Slots[rpgArcIdx].AbsoluteOffset, checked((int)cleanArc.Slots[rpgArcIdx].FileSize));
                         byte[] wBytes = ReadBytes(cleanFs, cleanArc.Slots[wazaArcIdx].AbsoluteOffset, checked((int)cleanArc.Slots[wazaArcIdx].FileSize));
+
+                        // If the installed randomizer no longer contains a clean face,
+                        // embed its clean data in the recipe instead of silently omitting
+                        // this character from the visual permutation. High bit marks a
+                        // template index, rather than an installed ARC0 slot index.
+                        uint ResolveVisualSource(int arcIdx, string path, byte[] data)
+                        {
+                            int installed = FindInstalledSlotForCleanAsset(arcIdx);
+                            if (installed >= 0) return (uint)installed;
+                            string normalized = NormalizeVirtPath(path);
+                            if (!templateByPath.TryGetValue(normalized, out var template))
+                                template = RegisterTemplate(path, data);
+                            return 0x80000000u | (uint)template.TemplateIndex;
+                        }
+                        uint instBust = ResolveVisualSource(bustArcIdx, pBust, bBytes);
+                        uint instRpg = ResolveVisualSource(rpgArcIdx, pRpg, rBytes);
+                        uint instWaza = ResolveVisualSource(wazaArcIdx, pWaza, wBytes);
 
                         groupMembers.Add(new VisualMemberSpec
                         {
@@ -1164,6 +1175,11 @@ namespace IEGORandomizer.Engine.OnConsole
                     tacticPool,
                     validRivalUniforms,
                     safeChestRewardPool);
+
+                // The 2DS C engine reserves a maximum of 32 MiB for the raw recipe.
+                // Refuse to package a recipe the console will necessarily reject.
+                if (rawPayload.Length > 32 * 1024 * 1024)
+                    throw new InvalidDataException($"2DS seed recipe exceeds 32 MiB ({rawPayload.Length} bytes).");
 
                 uint payloadCrc = Arc0DeltaPatchPackBuilder.ComputeCrc32(rawPayload);
                 byte[] lz4Payload = Arc0DeltaPatchPackBuilder.CompressLz4Block(rawPayload);

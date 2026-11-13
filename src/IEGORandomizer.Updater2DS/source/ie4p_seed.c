@@ -574,22 +574,22 @@ ie4p_status_t ie4p_apply_onconsole_seed_reader(
                 uint8_t *sd = slot_descs_raw + ((size_t)bust_arc * 24U);
                 wr_u32(sd + 8U, d_bust_sz);
                 wr_u32(sd + 12U, d_bust_crc);
-                wr_u32(sd + 16U, IE4R_SRC_INSTALLED_SLOT);
-                wr_u32(sd + 20U, d_bust_inst);
+                wr_u32(sd + 16U, (d_bust_inst & 0x80000000U) ? IE4R_SRC_MUTABLE_TEMPLATE : IE4R_SRC_INSTALLED_SLOT);
+                wr_u32(sd + 20U, d_bust_inst & 0x7FFFFFFFU);
             }
             if (rpg_arc < slot_count) {
                 uint8_t *sd = slot_descs_raw + ((size_t)rpg_arc * 24U);
                 wr_u32(sd + 8U, d_rpg_sz);
                 wr_u32(sd + 12U, d_rpg_crc);
-                wr_u32(sd + 16U, IE4R_SRC_INSTALLED_SLOT);
-                wr_u32(sd + 20U, d_rpg_inst);
+                wr_u32(sd + 16U, (d_rpg_inst & 0x80000000U) ? IE4R_SRC_MUTABLE_TEMPLATE : IE4R_SRC_INSTALLED_SLOT);
+                wr_u32(sd + 20U, d_rpg_inst & 0x7FFFFFFFU);
             }
             if (waza_arc < slot_count) {
                 uint8_t *sd = slot_descs_raw + ((size_t)waza_arc * 24U);
                 wr_u32(sd + 8U, d_waza_sz);
                 wr_u32(sd + 12U, d_waza_crc);
-                wr_u32(sd + 16U, IE4R_SRC_INSTALLED_SLOT);
-                wr_u32(sd + 20U, d_waza_inst);
+                wr_u32(sd + 16U, (d_waza_inst & 0x80000000U) ? IE4R_SRC_MUTABLE_TEMPLATE : IE4R_SRC_INSTALLED_SLOT);
+                wr_u32(sd + 20U, d_waza_inst & 0x7FFFFFFFU);
             }
 
             uint32_t cb_tpl = rd_u32(mi + 76U);
