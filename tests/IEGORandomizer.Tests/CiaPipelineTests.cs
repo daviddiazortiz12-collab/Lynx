@@ -10,6 +10,7 @@ using IEGORandomizer.Engine;
 using IEGORandomizer.Engine.Cia;
 using IEGORandomizer.Engine.Configuration;
 using Lynx.Core.Games;
+using Lynx.Core.Binary;
 using Lynx.Core.Maps;
 using Lynx.Core.RomFs;
 using Lynx.Core.RomFs.Cia;
@@ -1622,6 +1623,15 @@ namespace IEGORandomizer.Tests
                         $"Seed {trial} unexpectedly produced an identical archive.");
                     using var game = new Lynx.Core.Games.SafeGOGame(path, "es");
                     var chests = MapDataService.LoadAllTreasureChests(game.IE_A.Directory);
+                    Assert.True(RouteDataService.TryReadRouteFile(cleanCheck.GetDirectory("soccer"), "scr_br01.cfg.bin", out var cleanRoute));
+                    Assert.True(RouteDataService.TryReadRouteFile(game.GetDirectory("soccer"), "scr_br01.cfg.bin", out var newRoute));
+                    Assert.Equal(cleanRoute.Cells[0].ContentID, newRoute.Cells[0].ContentID, "Non-chest route cells must remain intact.");
+                    Assert.NotEqual(cleanRoute.Cells[1].ContentID, newRoute.Cells[1].ContentID, "Route chest should be randomized.");
+                    Assert.Equal(cleanRoute.Cells[2].ContentID, newRoute.Cells[2].ContentID, "Route key item must remain intact.");
+                    Assert.True(ShopDataService.TryReadShopFile(cleanCheck.GetDirectory("shop"), "shop_01.cfg.bin", out var cleanShop));
+                    Assert.True(ShopDataService.TryReadShopFile(game.GetDirectory("shop"), "shop_01.cfg.bin", out var newShop));
+                    Assert.NotEqual(cleanShop[1].ItemID, newShop[1].ItemID, "Shop item should be randomized.");
+                    Assert.Equal(cleanShop[2].ItemID, newShop[2].ItemID, "Shop key item must remain intact.");
                     Assert.Equal(cleanChests.Count, chests.Count);
                     foreach (var chest in chests)
                     {
