@@ -2,49 +2,30 @@
 
 #include <3ds.h>
 #include <3ds/services/fspxi.h>
-#include <3ds/applets/swkbd.h>
-#include <malloc.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <errno.h>
 
 #include "ie4p_core.h"
 #include "ie4p_seed.h"
+#include "pxi_romfs.h"
 
-#define IEGO_LIGHT_EUR_TID  0x0004000000112F00ULL
-#define IEGO_LIGHT_LOW_ID   0x00112F00U
-#define IEGO_LIGHT_HIGH_ID  0x00040000U
+/* Luma3DS / Rosalina custom SVC 0xB0 (ControlService): op 0 = STEAL_CLIENT_SESSION */
+extern Result svcControlService(uint32_t op, Handle *out, const char *service_name);
 
-#define LUMA_DIR_1     "sdmc:/luma"
-#define LUMA_DIR_2     "sdmc:/luma/titles"
-#define LUMA_DIR_3     "sdmc:/luma/titles/0004000000112F00"
-#define LUMA_DIR_4     "sdmc:/luma/titles/0004000000112F00/romfs"
-#define OUT_TMP_PATH   "sdmc:/luma/titles/0004000000112F00/romfs/ie_a.fa.tmp"
-#define OUT_FIN_PATH   "sdmc:/luma/titles/0004000000112F00/romfs/ie_a.fa"
-#define LAST_SEED_PATH "sdmc:/luma/titles/0004000000112F00/ultima_seed.txt"
-#define LUMA_INI       "sdmc:/luma/config.ini"
+#define LUMA_DIR_1       "sdmc:/luma"
+#define LUMA_DIR_2       "sdmc:/luma/titles"
+#define LUMA_DIR_3       "sdmc:/luma/titles/0004000000112F00"
+#define LUMA_DIR_4       "sdmc:/luma/titles/0004000000112F00/romfs"
+#define OUT_TMP_PATH     "sdmc:/luma/titles/0004000000112F00/romfs/ie_a.fa.tmp"
+#define OUT_FIN_PATH     "sdmc:/luma/titles/0004000000112F00/romfs/ie_a.fa"
+#define SEED_TAG_PATH    "sdmc:/luma/titles/0004000000112F00/ultima_seed.txt"
+#define LUMA_INI         "sdmc:/luma/config.ini"
 
 #define REPAIR_PACK_PATH "romfs:/patch_repair.ie4p"
 #define SEED_RECIPE_PATH "romfs:/seed_recipe.ie4r"
-
-#define PXI_BOUNCE_SIZE  65536U
-
-/* Provided by source/csvc.s (Luma3DS custom SVC 0xB0) */
-extern Result svcControlService(u32 op, Handle *outHandle, const char *serviceName);
-
-typedef struct {
-    Handle pxi_handle;
-    FSPXI_Archive pxi_arch;
-    FSPXI_File pxi_file;
-    FS_MediaType media;
-    uint64_t ie_a_offset_in_pxi;
-    uint64_t ie_a_size;
-    uint8_t *bounce_buf;
-    bool arch_open;
-    bool file_open;
-} pxi_game_ctx_t;
 
 typedef struct {
     PrintConsole *top;
@@ -52,237 +33,158 @@ typedef struct {
     int last_pct;
 } ui_ctx_t;
 
-static uint32_t le32(const uint8_t *p)
+static int32_t hal_3ds_steal_pxifs0(void *ctx, uint32_t *out_session)
 {
-    return (uint32_t)p[0]
-         | ((uint32_t)p[1] << 8)
-         | ((uint32_t)p[2] << 16)
-         | ((uint32_t)p[3] << 24);
+    (void)ctx;
+    Handle h = 0;
+    Result rc = svcControlService(0U, &h, "PxiFS0");
+    *out_session = (uint32_t)h;
+    return (int32_t)rc;
 }
 
-static uint64_t le64(const uint8_t *p)
+static int32_t hal_3ds_get_title_seed(void *ctx, uint64_t tid, uint32_t out_seed[4])
 {
-    return (uint64_t)le32(p) | ((uint64_t)le32(p + 4) << 32);
+    (void)ctx;
+    memset(out_seed, 0, 16U);
+    Handle *fs_h = fsGetSessionHandle();
+    if (fs_h == NULL || *fs_h == 0) {
+        return PXI_RC_SEED_NOT_FOUND;
+    }
+    u32 *cmd = getThreadCommandBuffer();
+    cmd[0] = IPC_MakeHeader(0x087B, 2, 0); /* 0x087B0080 FSUSER:GetSeed */
+    cmd[1] = (u32)(tid & 0xFFFFFFFFULL);
+    cmd[2] = (u32)(tid >> 32);
+    Result rc = svcSendSyncRequest(*fs_h);
+    if (R_FAILED(rc)) {
+        return (int32_t)rc;
+    }
+    rc = (Result)cmd[1];
+    if (R_FAILED(rc)) {
+        return (int32_t)rc;
+    }
+    memcpy(out_seed, &cmd[2], 16U);
+    return 0;
 }
 
-static int pxi_raw_read(pxi_game_ctx_t *g, uint64_t raw_off, void *dst, size_t len)
+static int hal_3ds_is_card_inserted(void *ctx)
 {
-    uint8_t *out = (uint8_t *)dst;
-    size_t done = 0U;
-    while (done < len) {
-        u32 chunk = (len - done) > PXI_BOUNCE_SIZE ? PXI_BOUNCE_SIZE : (u32)(len - done);
-        u32 got = 0U;
-        Result rc = FSPXI_ReadFile(g->pxi_handle, g->pxi_file, &got, raw_off + (uint64_t)done, g->bounce_buf, chunk);
-        if (R_FAILED(rc) || got != chunk) {
-            return -1;
-        }
-        memcpy(out + done, g->bounce_buf, chunk);
-        done += chunk;
+    (void)ctx;
+    bool inserted = false;
+    if (R_SUCCEEDED(FSUSER_CardSlotIsInserted(&inserted)) && inserted) {
+        return 1;
     }
     return 0;
 }
 
-static int pxi_ie_a_read_at(void *ctx, uint64_t offset, void *dst, size_t len)
+static int32_t hal_3ds_open_archive(
+    void *ctx,
+    uint32_t session,
+    uint64_t *out_arch,
+    uint32_t archive_id,
+    const void *path_data,
+    uint32_t path_size)
 {
-    if (len == 0U) {
-        return 0;
-    }
-    pxi_game_ctx_t *g = (pxi_game_ctx_t *)ctx;
-    if (g == NULL || offset + (uint64_t)len > g->ie_a_size) {
-        return -1;
-    }
-    return pxi_raw_read(g, g->ie_a_offset_in_pxi + offset, dst, len);
+    (void)ctx;
+    FSPXI_Archive arch = 0ULL;
+    FS_Path p = { PATH_BINARY, path_size, path_data };
+    Result rc = FSPXI_OpenArchive((Handle)session, &arch, (FS_ArchiveID)archive_id, p);
+    *out_arch = (uint64_t)arch;
+    return (int32_t)rc;
 }
 
-static void pxi_game_close(pxi_game_ctx_t *g)
+static int32_t hal_3ds_open_file(
+    void *ctx,
+    uint32_t session,
+    uint64_t *out_file,
+    uint64_t arch,
+    const void *path_data,
+    uint32_t path_size,
+    uint32_t flags,
+    uint32_t attrs)
 {
-    if (g == NULL) {
-        return;
-    }
-    if (g->file_open) {
-        FSPXI_CloseFile(g->pxi_handle, g->pxi_file);
-        g->file_open = false;
-    }
-    if (g->arch_open) {
-        FSPXI_CloseArchive(g->pxi_handle, g->pxi_arch);
-        g->arch_open = false;
-    }
-    if (g->pxi_handle != 0) {
-        svcCloseHandle(g->pxi_handle);
-        g->pxi_handle = 0;
-    }
-    if (g->bounce_buf != NULL) {
-        free(g->bounce_buf);
-        g->bounce_buf = NULL;
+    (void)ctx;
+    FSPXI_File f = 0ULL;
+    FS_Path p = { PATH_BINARY, path_size, path_data };
+    Result rc = FSPXI_OpenFile((Handle)session, &f, (FSPXI_Archive)arch, p, flags, attrs);
+    *out_file = (uint64_t)f;
+    return (int32_t)rc;
+}
+
+static int32_t hal_3ds_get_file_size(
+    void *ctx,
+    uint32_t session,
+    uint64_t file,
+    uint64_t *out_size)
+{
+    (void)ctx;
+    u64 sz = 0ULL;
+    Result rc = FSPXI_GetFileSize((Handle)session, (FSPXI_File)file, &sz);
+    *out_size = (uint64_t)sz;
+    return (int32_t)rc;
+}
+
+static int32_t hal_3ds_read_file(
+    void *ctx,
+    uint32_t session,
+    uint64_t file,
+    uint32_t *out_got,
+    uint64_t offset,
+    void *buffer,
+    uint32_t size)
+{
+    (void)ctx;
+    u32 got = 0U;
+    Result rc = FSPXI_ReadFile((Handle)session, (FSPXI_File)file, &got, offset, buffer, size);
+    *out_got = (uint32_t)got;
+    return (int32_t)rc;
+}
+
+static int32_t hal_3ds_close_file(void *ctx, uint32_t session, uint64_t file)
+{
+    (void)ctx;
+    return (int32_t)FSPXI_CloseFile((Handle)session, (FSPXI_File)file);
+}
+
+static int32_t hal_3ds_close_archive(void *ctx, uint32_t session, uint64_t arch)
+{
+    (void)ctx;
+    return (int32_t)FSPXI_CloseArchive((Handle)session, (FSPXI_Archive)arch);
+}
+
+static void hal_3ds_close_session(void *ctx, uint32_t session)
+{
+    (void)ctx;
+    if (session != 0U) {
+        svcCloseHandle((Handle)session);
     }
 }
 
-static bool utf16le_equals_ie_a_fa(const uint8_t *utf16_bytes, uint32_t byte_len)
-{
-    static const char target[7] = { 'i', 'e', '_', 'a', '.', 'f', 'a' };
-    if (byte_len != 14U) {
-        return false;
-    }
-    for (int i = 0; i < 7; i++) {
-        uint16_t ch = (uint16_t)utf16_bytes[i * 2] | ((uint16_t)utf16_bytes[i * 2 + 1] << 8);
-        if (ch >= 'A' && ch <= 'Z') {
-            ch = (uint16_t)(ch - 'A' + 'a');
-        }
-        if (ch != (uint16_t)target[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static int pxi_game_open(
+static int pxi_game_open_3ds(
     pxi_game_ctx_t *g,
     ie4p_reader_t *out_reader,
     Result *out_rc_svc,
     Result *out_rc_sd,
     Result *out_rc_cart)
 {
-    memset(g, 0, sizeof(*g));
-    *out_rc_svc = 0;
-    *out_rc_sd = 0;
-    *out_rc_cart = 0;
+    pxi_hal_t hal;
+    memset(&hal, 0, sizeof(hal));
+    hal.steal_pxifs0     = hal_3ds_steal_pxifs0;
+    hal.get_title_seed   = hal_3ds_get_title_seed;
+    hal.is_card_inserted = hal_3ds_is_card_inserted;
+    hal.open_archive     = hal_3ds_open_archive;
+    hal.open_file        = hal_3ds_open_file;
+    hal.get_file_size    = hal_3ds_get_file_size;
+    hal.read_file        = hal_3ds_read_file;
+    hal.close_file       = hal_3ds_close_file;
+    hal.close_archive    = hal_3ds_close_archive;
+    hal.close_session    = hal_3ds_close_session;
 
-    g->bounce_buf = (uint8_t *)memalign(16, PXI_BOUNCE_SIZE);
-    if (g->bounce_buf == NULL) {
-        return -1;
-    }
-
-    /* Steal PxiFS0 client session from ARM9 Process9 via Luma3DS custom SVC 0xB0 */
-    Result rc = svcControlService(0U, &g->pxi_handle, "PxiFS0");
-    *out_rc_svc = rc;
-    if (R_FAILED(rc) || g->pxi_handle == 0) {
-        pxi_game_close(g);
-        return -2;
-    }
-
-    /* Try SD card title first (0004000000112F00), then Game Card if SD fails */
-    u32 arch_sd[4] = { IEGO_LIGHT_LOW_ID, IEGO_LIGHT_HIGH_ID, (u32)MEDIATYPE_SD, 0U };
-    FS_Path path_sd = { PATH_BINARY, sizeof(arch_sd), arch_sd };
-    *out_rc_sd = FSPXI_OpenArchive(g->pxi_handle, &g->pxi_arch, ARCHIVE_SAVEDATA_AND_CONTENT, path_sd);
-    if (R_SUCCEEDED(*out_rc_sd)) {
-        g->arch_open = true;
-        g->media = MEDIATYPE_SD;
-    } else {
-        u32 arch_gc[4] = { IEGO_LIGHT_LOW_ID, IEGO_LIGHT_HIGH_ID, (u32)MEDIATYPE_GAME_CARD, 0U };
-        FS_Path path_gc = { PATH_BINARY, sizeof(arch_gc), arch_gc };
-        *out_rc_cart = FSPXI_OpenArchive(g->pxi_handle, &g->pxi_arch, ARCHIVE_SAVEDATA_AND_CONTENT, path_gc);
-        if (R_SUCCEEDED(*out_rc_cart)) {
-            g->arch_open = true;
-            g->media = MEDIATYPE_GAME_CARD;
-        } else {
-            pxi_game_close(g);
-            return -3;
-        }
-    }
-
-    /* Open raw NCCH RomFS stream (binary path 20 zero bytes => RomFS) */
-    u32 romfs_bin[5] = { 0U, 0U, 0U, 0U, 0U };
-    FS_Path romfs_path = { PATH_BINARY, sizeof(romfs_bin), romfs_bin };
-    rc = FSPXI_OpenFile(g->pxi_handle, &g->pxi_file, g->pxi_arch, romfs_path, FS_OPEN_READ, 0U);
-    if (R_FAILED(rc)) {
-        if (g->media == MEDIATYPE_SD) *out_rc_sd = rc;
-        else *out_rc_cart = rc;
-        pxi_game_close(g);
-        return -4;
-    }
-    g->file_open = true;
-
-    /* Probe Level-3 RomFS header (raw PxiFS0 starts with IVFC at 0x0000 and Level-3 at 0x1000) */
-    uint8_t ivfc_hdr[0x60];
-    if (pxi_raw_read(g, 0ULL, ivfc_hdr, sizeof(ivfc_hdr)) != 0) {
-        pxi_game_close(g);
-        return -5;
-    }
-
-    uint64_t candidates[3] = { 0x1000ULL, 0ULL, 0x2000ULL };
-    int cand_cnt = 2;
-    if (le32(ivfc_hdr + 0x00) == 0x43465649U) { /* "IVFC" */
-        uint32_t master_hash_sz = le32(ivfc_hdr + 0x08);
-        uint64_t computed_l3 = ((uint64_t)(0x60U + master_hash_sz) + 0xFFFULL) & ~0xFFFULL;
-        candidates[0] = computed_l3;
-        candidates[1] = 0x1000ULL;
-        candidates[2] = 0ULL;
-        cand_cnt = 3;
-    }
-
-    uint64_t l3_off = 0ULL;
-    uint8_t l3_hdr[0x28];
-    bool found_l3 = false;
-    for (int c = 0; c < cand_cnt; c++) {
-        if (pxi_raw_read(g, candidates[c], l3_hdr, sizeof(l3_hdr)) == 0 &&
-            le32(l3_hdr + 0x00) == 0x28U &&
-            le32(l3_hdr + 0x04) == 0x28U) {
-            l3_off = candidates[c];
-            found_l3 = true;
-            break;
-        }
-    }
-    if (!found_l3) {
-        pxi_game_close(g);
-        return -6;
-    }
-
-    uint32_t file_meta_off = le32(l3_hdr + 0x1C);
-    uint32_t file_meta_len = le32(l3_hdr + 0x20);
-    uint32_t file_data_off = le32(l3_hdr + 0x24);
-    if (file_meta_len == 0U || file_meta_len > 2U * 1024U * 1024U) {
-        pxi_game_close(g);
-        return -7;
-    }
-
-    uint8_t *ftab = (uint8_t *)malloc(file_meta_len);
-    if (ftab == NULL) {
-        pxi_game_close(g);
-        return -8;
-    }
-    if (pxi_raw_read(g, l3_off + (uint64_t)file_meta_off, ftab, file_meta_len) != 0) {
-        free(ftab);
-        pxi_game_close(g);
-        return -9;
-    }
-
-    bool found_ie_a = false;
-    uint32_t pos = 0U;
-    while (pos + 0x20U <= file_meta_len) {
-        uint32_t parent_off = le32(ftab + pos + 0x00U);
-        uint64_t data_off   = le64(ftab + pos + 0x08U);
-        uint64_t data_len   = le64(ftab + pos + 0x10U);
-        uint32_t name_bytes = le32(ftab + pos + 0x1CU);
-        if (pos + 0x20U + name_bytes > file_meta_len) {
-            break;
-        }
-        if (parent_off == 0U && utf16le_equals_ie_a_fa(ftab + pos + 0x20U, name_bytes)) {
-            g->ie_a_offset_in_pxi = l3_off + (uint64_t)file_data_off + data_off;
-            g->ie_a_size = data_len;
-            found_ie_a = true;
-            break;
-        }
-        uint32_t step_name = (name_bytes + 3U) & ~3U;
-        pos += 0x20U + step_name;
-    }
-    free(ftab);
-
-    if (!found_ie_a || g->ie_a_size < 72ULL) {
-        pxi_game_close(g);
-        return -10;
-    }
-
-    uint8_t arc_magic[4];
-    if (pxi_raw_read(g, g->ie_a_offset_in_pxi, arc_magic, 4U) != 0 ||
-        le32(arc_magic) != 0x30435241U) { /* "ARC0" */
-        pxi_game_close(g);
-        return -11;
-    }
-
-    out_reader->ctx = g;
-    out_reader->total_size = g->ie_a_size;
-    out_reader->read_at = pxi_ie_a_read_at;
-    return 0;
+    int32_t rc_svc = 0, rc_sd = 0, rc_cart = 0;
+    int st = pxi_game_open_with_hal(g, &hal, out_reader, &rc_svc, &rc_sd, &rc_cart);
+    *out_rc_svc  = (Result)rc_svc;
+    *out_rc_sd   = (Result)rc_sd;
+    *out_rc_cart = (Result)rc_cart;
+    return st;
 }
 
 static void mkdir_p_luma(void)
@@ -293,19 +195,19 @@ static void mkdir_p_luma(void)
     mkdir(LUMA_DIR_4, 0777);
 }
 
-static void read_last_seed_label(char *buf, size_t cap)
+static void read_last_seed_label(char *out, size_t cap)
 {
-    buf[0] = '\0';
-    FILE *f = fopen(LAST_SEED_PATH, "rb");
+    out[0] = '\0';
+    FILE *f = fopen(SEED_TAG_PATH, "rb");
     if (!f) {
         return;
     }
-    size_t n = fread(buf, 1U, cap - 1U, f);
+    size_t n = fread(out, 1, cap - 1U, f);
     fclose(f);
-    buf[n] = '\0';
-    for (size_t i = 0U; i < n; i++) {
-        if (buf[i] == '\r' || buf[i] == '\n') {
-            buf[i] = '\0';
+    out[n] = '\0';
+    for (size_t i = 0; i < n; i++) {
+        if (out[i] == '\r' || out[i] == '\n') {
+            out[i] = '\0';
             break;
         }
     }
@@ -314,7 +216,7 @@ static void read_last_seed_label(char *buf, size_t cap)
 static void save_last_seed_label(const char *label)
 {
     mkdir_p_luma();
-    FILE *f = fopen(LAST_SEED_PATH, "wb");
+    FILE *f = fopen(SEED_TAG_PATH, "wb");
     if (!f) {
         return;
     }
@@ -455,8 +357,8 @@ static void draw_menu_screens(
 {
     consoleSelect(bottomScreen);
     consoleClear();
-    printf("\x1b[36;1m=== PARCELA TECNICA v1.2.4 (TODO EN 1) ===\x1b[0m\n");
-    printf("- Fix 0xC880448D (lector directo PxiFS0)\n");
+    printf("\x1b[36;1m=== PARCELA TECNICA v1.2.5 (TODO EN 1) ===\x1b[0m\n");
+    printf("- Fix 0xD9004676 (PxiFS0 0x24 + DMA 4KB)\n");
     printf("- Fix crash Cap.1 Caballeros Templarios\n");
     printf("- Sprites 100%% coherentes (mapa/video)\n");
     printf("- Fix uniforme 903 Victor Blade\n");
@@ -471,13 +373,12 @@ static void draw_menu_screens(
     consoleSelect(topScreen);
     consoleClear();
     printf("\x1b[36;1m================================================\n");
-    printf(" INAZUMA ELEVEN GO: LUZ - RANDOMIZER 2DS v1.2.4\n");
+    printf(" INAZUMA ELEVEN GO: LUZ - RANDOMIZER 2DS v1.2.5\n");
     printf(" Reparador + Generador de Seeds en Consola\n");
     printf("================================================\x1b[0m\n");
     printf(" \x1b[32;1m[OK]\x1b[0m Juego detectado (%s, %u MB)\n\n",
            media == MEDIATYPE_SD ? "Tarjeta SD" : "Cartucho",
            (unsigned)(ie_a_bytes / (1024ULL * 1024ULL)));
-
     printf(" Elige que quieres hacer:\n\n");
     printf(" \x1b[32;1m[A]\x1b[0m REPARAR PARTIDA ACTUAL (Mantener mi Seed)\n");
     printf("     Arregla todos los bugs sin perder tu save.\n\n");
@@ -511,7 +412,7 @@ int main(int argc, char **argv)
     pxi_game_ctx_t game_ctx;
     ie4p_reader_t game_reader;
     Result rc_svc = 0, rc_sd = 0, rc_cart = 0;
-    int open_err = pxi_game_open(&game_ctx, &game_reader, &rc_svc, &rc_sd, &rc_cart);
+    int open_err = pxi_game_open_3ds(&game_ctx, &game_reader, &rc_svc, &rc_sd, &rc_cart);
     if (open_err != 0) {
         consoleSelect(&topScreen);
         printf("\x1b[31;1m[ERROR] No se pudo abrir Inazuma Eleven GO: Luz\n");
@@ -524,9 +425,10 @@ int main(int argc, char **argv)
         goto wait_exit;
     }
 
+    FS_MediaType detected_media = (game_ctx.media == PXI_MEDIA_SD) ? MEDIATYPE_SD : MEDIATYPE_GAME_CARD;
     char last_seed[64];
     read_last_seed_label(last_seed, sizeof(last_seed));
-    draw_menu_screens(&topScreen, &bottomScreen, game_ctx.media, game_ctx.ie_a_size, last_seed);
+    draw_menu_screens(&topScreen, &bottomScreen, detected_media, game_ctx.ie_a_size, last_seed);
 
     int selected_mode = 0; /* 1 = repair, 2 = seed */
     char chosen_seed[64];
@@ -565,7 +467,7 @@ int main(int argc, char **argv)
                 snprintf(chosen_seed, sizeof(chosen_seed), "%s", input_buf);
                 break;
             }
-            draw_menu_screens(&topScreen, &bottomScreen, game_ctx.media, game_ctx.ie_a_size, last_seed);
+            draw_menu_screens(&topScreen, &bottomScreen, detected_media, game_ctx.ie_a_size, last_seed);
         }
 
         if (kDown & KEY_Y) {
@@ -602,7 +504,7 @@ int main(int argc, char **argv)
                 snprintf(chosen_seed, sizeof(chosen_seed), "%s", rnd_seed);
                 break;
             }
-            draw_menu_screens(&topScreen, &bottomScreen, game_ctx.media, game_ctx.ie_a_size, last_seed);
+            draw_menu_screens(&topScreen, &bottomScreen, detected_media, game_ctx.ie_a_size, last_seed);
         }
 
         gfxFlushBuffers();
@@ -658,7 +560,7 @@ int main(int argc, char **argv)
         printf(" Seed activa : \x1b[33;1m%s\x1b[0m\n", chosen_seed);
         printf(" Modo        : Todo Activado + Todos los Fixes\n\n");
     } else {
-        printf(" Modo        : Reparacion Quirurgica v1.2.4\n");
+        printf(" Modo        : Reparacion Quirurgica v1.2.5\n");
         printf(" Partida/Seed: 100%% conservadas\n\n");
     }
     printf(" Construyendo ie_a.fa en tarjeta SD...\n");
@@ -680,7 +582,7 @@ int main(int argc, char **argv)
             &game_reader, f_pack, chosen_seed, f_out, on_patch_progress, &ui, err_msg, sizeof(err_msg));
     }
 
-    FS_MediaType launch_media = game_ctx.media;
+    FS_MediaType launch_media = detected_media;
     fclose(f_out);
     fclose(f_pack);
     pxi_game_close(&game_ctx);
@@ -713,7 +615,7 @@ int main(int argc, char **argv)
     consoleSelect(&topScreen);
     printf("\x1b[22;1H\x1b[32;1m================================================\n");
     if (selected_mode == 1) {
-        printf("  PARTIDA REPARADA CON EXITO! (v1.2.4)\n");
+        printf("  PARTIDA REPARADA CON EXITO! (v1.2.5)\n");
     } else {
         printf("  SEED '%s' LISTA PARA JUGAR!\n", chosen_seed);
     }

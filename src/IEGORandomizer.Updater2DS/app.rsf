@@ -70,6 +70,7 @@ AccessControlInfo:
     - Shop
     - Shell
     - Core
+    - SeedDB
 
   IoAccessControl:
     - FsMountNand

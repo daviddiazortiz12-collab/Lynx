@@ -14,7 +14,7 @@ DATA            :=
 INCLUDES        := source
 ROMFS           := romfs
 
-APP_TITLE       := IEGO Luz Randomizer v1.2.4
+APP_TITLE       := IEGO Luz Randomizer v1.2.5
 APP_DESCRIPTION := Reparador + Generador de Seeds en Consola 2DS
 APP_AUTHOR      := Lynx IEGO Randomizer
 

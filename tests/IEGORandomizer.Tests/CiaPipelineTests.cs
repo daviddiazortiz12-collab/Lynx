@@ -1346,20 +1346,32 @@ namespace IEGORandomizer.Tests
                 // 5) Compile and run the exact portable ARM11 C99 engine (src/IEGORandomizer.Updater2DS/source/ie4p_core.c) if gcc is installed
                 string repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
                 string hostVerifyC = Path.Combine(repoRoot, "src", "IEGORandomizer.Updater2DS", "host_verify.c");
+                string pxiRomfsC = Path.Combine(repoRoot, "src", "IEGORandomizer.Updater2DS", "source", "pxi_romfs.c");
                 string coreC = Path.Combine(repoRoot, "src", "IEGORandomizer.Updater2DS", "source", "ie4p_core.c");
                 string seedC = Path.Combine(repoRoot, "src", "IEGORandomizer.Updater2DS", "source", "ie4p_seed.c");
-                if (File.Exists(hostVerifyC) && File.Exists(coreC) && File.Exists(seedC) && File.Exists("/usr/bin/gcc"))
+                if (File.Exists(hostVerifyC) && File.Exists(pxiRomfsC) && File.Exists(coreC) && File.Exists(seedC) && File.Exists("/usr/bin/gcc"))
                 {
                     string cBin = Path.Combine(tempDir, "ie4p_host_verify");
                     var gccProc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                     {
                         FileName = "/usr/bin/gcc",
-                        ArgumentList = { "-std=c99", "-O2", "-Wall", "-Wextra", "-Werror", hostVerifyC, coreC, seedC, "-o", cBin },
+                        ArgumentList = { "-std=c99", "-O2", "-Wall", "-Wextra", "-Werror", hostVerifyC, pxiRomfsC, coreC, seedC, "-o", cBin },
                         RedirectStandardError = true,
                         UseShellExecute = false
                     });
                     gccProc!.WaitForExit();
                     Assert.Equal(0, gccProc.ExitCode);
+
+                    var pxiSelfTestProc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = cBin,
+                        ArgumentList = { "--pxi-self-test" },
+                        RedirectStandardError = true,
+                        RedirectStandardOutput = true,
+                        UseShellExecute = false
+                    });
+                    pxiSelfTestProc!.WaitForExit();
+                    Assert.Equal(0, pxiSelfTestProc.ExitCode);
 
                     foreach (string baseArchive in new[] { vanillaIea, installedV122Iea })
                     {
@@ -1504,6 +1516,7 @@ namespace IEGORandomizer.Tests
                 gccInfo.ArgumentList.Add("-Wextra");
                 gccInfo.ArgumentList.Add("-Werror");
                 gccInfo.ArgumentList.Add(Path.Combine(repoRoot, "src", "IEGORandomizer.Updater2DS", "host_verify.c"));
+                gccInfo.ArgumentList.Add(Path.Combine(repoRoot, "src", "IEGORandomizer.Updater2DS", "source", "pxi_romfs.c"));
                 gccInfo.ArgumentList.Add(Path.Combine(repoRoot, "src", "IEGORandomizer.Updater2DS", "source", "ie4p_core.c"));
                 gccInfo.ArgumentList.Add(Path.Combine(repoRoot, "src", "IEGORandomizer.Updater2DS", "source", "ie4p_seed.c"));
                 gccInfo.ArgumentList.Add("-o");
