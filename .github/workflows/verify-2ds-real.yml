@@ -1,0 +1,49 @@
+name: Verify 2DS with real game inputs (no release)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arena/799dcf14-lynx
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet nuget add source https://api.nuget.org/v3/index.json --name nuget.org --configfile NuGet.Config
+      - run: dotnet build IEGORandomizer.sln --configuration Release
+      - name: Download user-provided inputs
+        run: |
+          python3 -m venv /tmp/py
+          /tmp/py/bin/pip install --quiet gdown
+          mkdir -p /tmp/iego
+          installed=$(jq -r '.installedRandomizadoId' .cia-build-request.json)
+          clean=$(jq -r '.cleanReferenceId' .cia-build-request.json)
+          echo "::add-mask::$installed"
+          echo "::add-mask::$clean"
+          /tmp/py/bin/gdown --retries 5 "$installed" -O /tmp/iego/installed.cia
+          /tmp/py/bin/gdown --retries 5 "$clean" -O /tmp/iego/clean.cia
+      - name: Repair, detect and generate seeds
+        run: |
+          set -eo pipefail
+          trap 'rc=$?; if [ $rc -ne 0 ]; then echo "::error::Real-input test failed at line $LINENO (exit $rc)"; fi' EXIT
+          gcc -std=c99 -O2 -Wall -Wextra -Werror src/IEGORandomizer.Updater2DS/host_verify.c src/IEGORandomizer.Updater2DS/source/pxi_romfs.c src/IEGORandomizer.Updater2DS/source/ie4p_core.c src/IEGORandomizer.Updater2DS/source/ie4p_seed.c -o /tmp/host
+          /tmp/host --pxi-self-test
+          IE4P_EXPORT_INSTALLED_BASE=1 dotnet run --project src/IEGORandomizer.App/IEGORandomizer.App.csproj -c Release --no-build -- --cli --repair-installed /tmp/iego/installed.cia --clean-reference /tmp/iego/clean.cia --output /tmp/iego/repaired.fa --export-2ds-delta-pack /tmp/iego/repair.ie4p
+          /tmp/host --pxi-cia /tmp/iego/installed.cia /tmp/iego/repair.ie4p /tmp/iego/reconstructed.fa
+          cmp /tmp/iego/repaired.fa /tmp/iego/reconstructed.fa
+          rm /tmp/iego/reconstructed.fa /tmp/iego/repaired.fa
+          INSTALLED_FA=/tmp/iego/repaired.fa.installed_base.fa
+          dotnet run --project src/IEGORandomizer.App/IEGORandomizer.App.csproj -c Release --no-build -- --cli --input "$INSTALLED_FA" --clean-reference /tmp/iego/clean.cia --build-2ds-seed-recipe /tmp/iego/recipe.ie4r
+          /tmp/host --seed "$INSTALLED_FA" /tmp/iego/recipe.ie4r "DAVID-REAL-VERIFY" /tmp/iego/a.fa
+          /tmp/host --seed "$INSTALLED_FA" /tmp/iego/recipe.ie4r " david-real-verify " /tmp/iego/b.fa
+          cmp /tmp/iego/a.fa /tmp/iego/b.fa
+          rm /tmp/iego/b.fa
+          dotnet run --project src/IEGORandomizer.App/IEGORandomizer.App.csproj -c Release --no-build -- --cli --diagnose --input /tmp/iego/a.fa
+          /tmp/host --seed "$INSTALLED_FA" /tmp/iego/recipe.ie4r "OTHER-REAL-VERIFY" /tmp/iego/b.fa
+          if cmp -s /tmp/iego/a.fa /tmp/iego/b.fa; then echo '::error::Distinct seeds generated identical archives'; exit 1; fi
+          dotnet run --project src/IEGORandomizer.App/IEGORandomizer.App.csproj -c Release --no-build -- --cli --diagnose --input /tmp/iego/b.fa
