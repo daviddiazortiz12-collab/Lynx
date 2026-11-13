@@ -43,6 +43,9 @@ jobs:
 
       - name: Build & Cold-Verify Both Lightweight 2DS .CIA Updaters Over Installed _Randomizado.cia
         run: |
+          exec > >(tee -a /tmp/cia_step.log) 2>&1
+          trap 'rc=$?; if [ $rc -ne 0 ]; then echo "::error::Step failed (rc=$rc): $(tail -n 25 /tmp/cia_step.log | tr "\n" " " | cut -c1-900)"; fi' EXIT
+
           if [ ! -f .cia-build-request.json ]; then
             echo "No .cia-build-request.json found; skipping."
             exit 0
@@ -60,13 +63,14 @@ jobs:
           echo "::add-mask::${INSTALLED_ID}"
           echo "::add-mask::${CLEAN_REF_ID}"
 
-          python3 -m pip install --quiet --upgrade gdown qrcode pillow
+          python3 -m venv /tmp/py
+          /tmp/py/bin/pip install --quiet --upgrade pip gdown qrcode pillow
           mkdir -p /tmp/cia_work /tmp/cia_out src/IEGORandomizer.Updater2DS/romfs
 
           echo "Downloading installed _Randomizado.cia from Google Drive..."
-          python3 -m gdown --fuzzy "https://drive.google.com/uc?id=${INSTALLED_ID}" -O /tmp/cia_work/installed_randomizado.cia
+          /tmp/py/bin/gdown --fuzzy "https://drive.google.com/uc?id=${INSTALLED_ID}" -O /tmp/cia_work/installed_randomizado.cia
           echo "Downloading clean retail reference .cia from Google Drive..."
-          python3 -m gdown --fuzzy "https://drive.google.com/uc?id=${CLEAN_REF_ID}" -O /tmp/cia_work/clean_retail.cia
+          /tmp/py/bin/gdown --fuzzy "https://drive.google.com/uc?id=${CLEAN_REF_ID}" -O /tmp/cia_work/clean_retail.cia
           ls -lh /tmp/cia_work/*.cia
 
           gcc -std=c99 -O2 -Wall -Wextra -Werror src/IEGORandomizer.Updater2DS/host_verify.c src/IEGORandomizer.Updater2DS/source/ie4p_core.c -o /tmp/ie4p_host_verify
@@ -75,9 +79,24 @@ jobs:
           make -C /tmp/makerom_src/makerom deps -j4
           make -C /tmp/makerom_src/makerom -j4
 
-          # Compile ARM11 2DS ELF + SMDH icon once inside official devkitpro/devkitarm container
+          # Compile ARM11 2DS ELF + SMDH icon directly inside official devkitpro/devkitarm container
           docker run --rm -v "$PWD/src/IEGORandomizer.Updater2DS:/work" -w /work devkitpro/devkitarm:latest \
-            bash -c 'export DEVKITPRO=/opt/devkitpro DEVKITARM=/opt/devkitpro/devkitARM PATH=/opt/devkitpro/tools/bin:/opt/devkitpro/devkitARM/bin:$PATH && make clean && make -j4 && ls -lh updater_2ds.elf updater_2ds.smdh'
+            bash -ce '
+              export DEVKITPRO=/opt/devkitpro
+              export DEVKITARM=/opt/devkitpro/devkitARM
+              export PATH=/opt/devkitpro/tools/bin:/opt/devkitpro/devkitARM/bin:$PATH
+              arm-none-eabi-gcc -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft \
+                -O2 -Wall -Wextra -mword-relocations -ffunction-sections -D__3DS__ \
+                -I/opt/devkitpro/libctru/include -I/work/source \
+                /work/source/main.c /work/source/ie4p_core.c \
+                -specs=3dsx.specs -L/opt/devkitpro/libctru/lib -lctru -lm \
+                -o /work/updater_2ds.elf
+              smdhtool --create "IEGO Luz Parche v1.2.3" \
+                "Actualizacion ligera v1.2.3 para 2DS (sin borrar partida)" \
+                "Lynx IEGO Randomizer" \
+                /work/icon.png /work/updater_2ds.smdh
+              ls -lh /work/updater_2ds.elf /work/updater_2ds.smdh
+            '
 
           # =========================================================================
           # 1) Build ULTRA-LIGHTWEIGHT SURGICAL REPAIR .CIA (~2-4 MB) over _Randomizado.cia
@@ -178,8 +197,8 @@ jobs:
           URL_REPAIR="https://github.com/${REPO_SLUG}/releases/download/${REL_TAG}/${REPAIR_NAME}"
           URL_FRESH="https://github.com/${REPO_SLUG}/releases/download/${REL_TAG}/${FRESH_NAME}"
 
-          python3 -c "import qrcode; qrcode.make('${URL_REPAIR}').save('/tmp/cia_out/QR_FBI_RepararPartidaActual_v1.2.3.png')"
-          python3 -c "import qrcode; qrcode.make('${URL_FRESH}').save('/tmp/cia_out/QR_FBI_NuevaSemilla_v1.2.3.png')"
+          /tmp/py/bin/python -c "import qrcode; qrcode.make('${URL_REPAIR}').save('/tmp/cia_out/QR_FBI_RepararPartidaActual_v1.2.3.png')"
+          /tmp/py/bin/python -c "import qrcode; qrcode.make('${URL_FRESH}').save('/tmp/cia_out/QR_FBI_NuevaSemilla_v1.2.3.png')"
 
           REPAIR_MB=$(awk "BEGIN {printf \"%.1f\", $(stat -c%s "$REPAIR_CIA")/1048576}")
           FRESH_MB=$(awk "BEGIN {printf \"%.1f\", $(stat -c%s "$FRESH_CIA")/1048576}")

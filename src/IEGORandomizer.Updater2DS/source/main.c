@@ -184,7 +184,7 @@ int main(int argc, char **argv)
     Result rc_romfs = romfsInit();
     if (R_FAILED(rc_romfs)) {
         printf("\x1b[31;1m[ERROR] No se pudo abrir RomFS del actualizador\n");
-        printf("Codigo: 0x%08lX\x1b[0m\n", rc_romfs);
+        printf("Codigo: 0x%08lX\x1b[0m\n", (unsigned long)rc_romfs);
         goto wait_exit;
     }
 
@@ -198,7 +198,7 @@ int main(int argc, char **argv)
     if (R_FAILED(rc_game)) {
         printf("\x1b[31;1m[ERROR] No se encontro Inazuma Eleven GO: Luz\n");
         printf("(0004000000112F00) instalado en esta 2DS.\n");
-        printf("Codigo: 0x%08lX\x1b[0m\n", rc_game);
+        printf("Codigo: 0x%08lX\x1b[0m\n", (unsigned long)rc_game);
         romfsExit();
         goto wait_exit;
     }
