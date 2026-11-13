@@ -50,3 +50,4 @@ jobs:
           /tmp/host --seed "$INSTALLED_FA" /tmp/iego/recipe.ie4r "OTHER-REAL-VERIFY" /tmp/iego/b.fa
           if cmp -s /tmp/iego/a.fa /tmp/iego/b.fa; then echo '::error::Distinct seeds generated identical archives'; exit 1; fi
           dotnet run --project src/IEGORandomizer.App/IEGORandomizer.App.csproj -c Release --no-build -- --cli --diagnose --input /tmp/iego/b.fa
+# Recheck the current seed engine and visual fallback.
