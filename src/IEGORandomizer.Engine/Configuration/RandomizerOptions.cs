@@ -125,6 +125,7 @@ namespace IEGORandomizer.Engine.Configuration
         public string CustomTitleIdOverride { get; set; } = string.Empty;
         public string DirectCitraModsRootPath { get; set; } = string.Empty;
         public string Export2dsDeltaPatchPackPath { get; set; } = string.Empty;
+        public string DeltaPatchInstalledBaselinePath { get; set; } = string.Empty;
         public bool AssumePriorRandomizedInstallForDeltaPack { get; set; } = true;
     }
 

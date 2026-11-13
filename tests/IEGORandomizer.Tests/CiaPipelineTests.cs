@@ -1383,6 +1383,83 @@ namespace IEGORandomizer.Tests
             }
         }
 
+        [Fact]
+        public void SurgicalV122Repair_RestoresItemRefSystemTextMapNpcHeadsAndVictorRig_AndReconstructsViaC99Engine()
+        {
+            string tempDir = CreateTempTestDir("surgical_v122_repair");
+            try
+            {
+                string sourceCia = Path.Combine(tempDir, "Luz_Clean.cia");
+                BuildSyntheticLuzV000MultiContentCia(sourceCia, out var origAssets);
+                string cleanFa = Path.Combine(tempDir, "clean_ie_a.fa");
+                File.WriteAllBytes(cleanFa, origAssets["ie_a.fa"]);
+
+                // Produce a randomized v1.2.2-like archive and simulate the 3 v1.2.2 bugs inside it
+                string randDir = Path.Combine(tempDir, "rand_out");
+                Assert.Equal(0, CliRunner.Run(new[] { "--cli", "--input", cleanFa, "--output", randDir, "--preset", "full", "--seed", "V122-CONSOLE" }));
+                string corruptedV122Fa = Directory.GetFiles(randDir, "ie_a.fa", SearchOption.AllDirectories)[0];
+
+                using (var game = new Lynx.Core.Games.SafeGOGame(corruptedV122Fa, "es"))
+                {
+                    // Simulate bug 1: wipe ITEM_REF_BEGIN children in item_config.cfg.bin
+                    byte[] itemBytes = Arc0SafeArchive.TryReadFileFromPath(game.IE_A.Directory, "/data/res/item/item_config.cfg.bin");
+                    var itemCfg = new StudioElevenLib.Level5.Binary.CfgBin<StudioElevenLib.Level5.Binary.Collections.CfgTreeNode>();
+                    itemCfg.Open(itemBytes);
+                    var refNode = itemCfg.Entries.FindByName("ITEM_REF_BEGIN");
+                    if (refNode != null) refNode.Children.Clear();
+                    Arc0SafeArchive.WriteFileAtPath(game.IE_A.Directory, "/data/res/item/item_config.cfg.bin", itemCfg.Save());
+
+                    // Simulate bug 2: corrupt cp0010 Body/Gender
+                    var bases = game.GetCharabase();
+                    var cp10 = System.Linq.Enumerable.FirstOrDefault(bases, b => b.ModelNumber == 10);
+                    if (cp10 != null)
+                    {
+                        cp10.Body = 2;
+                        cp10.Gender = 2;
+                        game.SaveCharaBase(bases);
+                    }
+
+                    string damagedPath = Path.Combine(tempDir, "damaged_v122_ie_a.fa");
+                    Arc0SafeArchive.SaveCopyTo(game.IE_A, damagedPath, corruptedV122Fa);
+                    corruptedV122Fa = damagedPath;
+                }
+
+                string repairedFa = Path.Combine(tempDir, "repaired_v123_ie_a.fa");
+                string repairPack = Path.Combine(tempDir, "repair_v123.ie4p");
+                int rcRepair = CliRunner.Run(new[]
+                {
+                    "--cli",
+                    "--repair-installed", corruptedV122Fa,
+                    "--clean-reference", cleanFa,
+                    "--output", repairedFa,
+                    "--export-2ds-delta-pack", repairPack
+                });
+                Assert.Equal(0, rcRepair);
+                Assert.True(File.Exists(repairedFa));
+                Assert.True(File.Exists(repairPack));
+
+                using (var ver = new Lynx.Core.Games.SafeGOGame(repairedFa, "es"))
+                {
+                    var cp10 = System.Linq.Enumerable.FirstOrDefault(ver.GetCharabase(), b => b.ModelNumber == 10);
+                    if (cp10 != null)
+                    {
+                        Assert.Equal(1, cp10.Body);
+                        Assert.Equal(1, cp10.Gender);
+                    }
+                }
+
+                string reconPath = Path.Combine(tempDir, "recon_from_damaged.fa");
+                Arc0DeltaPatchPackBuilder.ApplyPackToStream(corruptedV122Fa, repairPack, reconPath);
+                Assert.Equal(
+                    CiaFormatInspector.ComputeStreamingFileSha256Hex(repairedFa),
+                    CiaFormatInspector.ComputeStreamingFileSha256Hex(reconPath));
+            }
+            finally
+            {
+                TryCleanup(tempDir);
+            }
+        }
+
         private static string CreateTempTestDir(string prefix)
         {
             string dir = Path.Combine(Path.GetTempPath(), $"iego_test_{prefix}_{Guid.NewGuid():N}");

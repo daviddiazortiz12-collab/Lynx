@@ -223,11 +223,30 @@ namespace IEGORandomizer.Engine
             if (!string.IsNullOrWhiteSpace(options.Export.Export2dsDeltaPatchPackPath))
             {
                 ReportStep(progress, 98, "Generando paquete ligero independiente IE4P para actualizador .CIA de 2DS...");
-                var deltaRes = Arc0DeltaPatchPackBuilder.BuildPack(
-                    workspace.ActiveIeAFaPath,
-                    exportedFa,
-                    options.Export.Export2dsDeltaPatchPackPath,
-                    options.Export.AssumePriorRandomizedInstallForDeltaPack);
+                Arc0DeltaPatchPackResult deltaRes;
+                if (!string.IsNullOrWhiteSpace(options.Export.DeltaPatchInstalledBaselinePath) &&
+                    File.Exists(options.Export.DeltaPatchInstalledBaselinePath))
+                {
+                    using var baselineWs = GameWorkspace.Open(
+                        options.Export.DeltaPatchInstalledBaselinePath,
+                        GameEdition.Auto,
+                        options.PreferredLanguageCode,
+                        computeSourceSha256: false,
+                        aesKeysPath: options.AesKeysPath);
+                    deltaRes = Arc0DeltaPatchPackBuilder.BuildPack(
+                        baselineWs.ActiveIeAFaPath,
+                        exportedFa,
+                        options.Export.Export2dsDeltaPatchPackPath,
+                        assumePriorRandomizedInstall: false);
+                }
+                else
+                {
+                    deltaRes = Arc0DeltaPatchPackBuilder.BuildPack(
+                        workspace.ActiveIeAFaPath,
+                        exportedFa,
+                        options.Export.Export2dsDeltaPatchPackPath,
+                        options.Export.AssumePriorRandomizedInstallForDeltaPack);
+                }
 
                 report.ExportedPaths.Add(deltaRes.OutputPackPath);
                 report.ValidationMessages.Add(

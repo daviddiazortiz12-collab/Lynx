@@ -14,8 +14,13 @@ permissions:
 jobs:
   build-lightweight-2ds-cia:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
+      - name: Free Runner Disk Space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h
+
       - name: Checkout branch arena/799dcf14-lynx
         uses: actions/checkout@v4
         with:
@@ -31,133 +36,173 @@ jobs:
         run: |
           dotnet nuget add source https://api.nuget.org/v3/index.json --name nuget.org --configfile NuGet.Config
 
-      - name: Build & Run Full 36-Test Hardware + IE4P C99 Engine Suite
+      - name: Build & Run Full 37-Test Hardware + IE4P C99 Engine Suite
         run: |
           dotnet build IEGORandomizer.sln --configuration Release
           dotnet run --project tests/IEGORandomizer.Tests/IEGORandomizer.Tests.csproj --configuration Release --no-build
 
-      - name: Generate Verified IE4P Delta Pack & Compile ARM11 2DS Updater .CIA
+      - name: Build & Cold-Verify Both Lightweight 2DS .CIA Updaters Over Installed _Randomizado.cia
         run: |
           if [ ! -f .cia-build-request.json ]; then
             echo "No .cia-build-request.json found; skipping."
             exit 0
           fi
 
-          GDRIVE_ID=$(jq -r '.gdriveSourceId // .gdriveCiaId // empty' .cia-build-request.json)
+          INSTALLED_ID=$(jq -r '.installedRandomizadoId // empty' .cia-build-request.json)
+          CLEAN_REF_ID=$(jq -r '.cleanReferenceId // empty' .cia-build-request.json)
+          FRESH_SEED=$(jq -r '.freshSeed // "IEGO-LUZ-V123-2DS"' .cia-build-request.json)
           INPUT_PRESET=$(jq -r '.preset // "full"' .cia-build-request.json)
-          INPUT_SEED=$(jq -r '.seed // empty' .cia-build-request.json)
-          OVER_VANILLA=$(jq -r '.overVanillaOnly // "false"' .cia-build-request.json)
 
-          if [ -z "$GDRIVE_ID" ]; then
-            echo "ERROR: gdriveSourceId missing in .cia-build-request.json"
+          if [ -z "$INSTALLED_ID" ] || [ -z "$CLEAN_REF_ID" ]; then
+            echo "ERROR: Missing Google Drive IDs in .cia-build-request.json"
             exit 1
           fi
-          echo "::add-mask::${GDRIVE_ID}"
+          echo "::add-mask::${INSTALLED_ID}"
+          echo "::add-mask::${CLEAN_REF_ID}"
 
           python3 -m pip install --quiet --upgrade gdown qrcode pillow
           mkdir -p /tmp/cia_work /tmp/cia_out src/IEGORandomizer.Updater2DS/romfs
 
-          python3 -m gdown --fuzzy "https://drive.google.com/uc?id=${GDRIVE_ID}" -O /tmp/cia_work/raw_download.bin
-          ls -lh /tmp/cia_work/raw_download.bin
+          echo "Downloading installed _Randomizado.cia from Google Drive..."
+          python3 -m gdown --fuzzy "https://drive.google.com/uc?id=${INSTALLED_ID}" -O /tmp/cia_work/installed_randomizado.cia
+          echo "Downloading clean retail reference .cia from Google Drive..."
+          python3 -m gdown --fuzzy "https://drive.google.com/uc?id=${CLEAN_REF_ID}" -O /tmp/cia_work/clean_retail.cia
+          ls -lh /tmp/cia_work/*.cia
 
-          MAGIC_HEX=$(head -c 4 /tmp/cia_work/raw_download.bin | xxd -p)
-          if [ "$MAGIC_HEX" = "41524330" ]; then
-            SRC_INPUT="/tmp/cia_work/ie_a.fa"
-            mv /tmp/cia_work/raw_download.bin "$SRC_INPUT"
-            echo "Detected standalone Level-5 ARC0 archive (ie_a.fa)."
-          else
-            SRC_INPUT="/tmp/cia_work/source_base.cia"
-            mv /tmp/cia_work/raw_download.bin "$SRC_INPUT"
-            echo "Detected Nintendo 3DS .CIA container."
-          fi
+          gcc -std=c99 -O2 -Wall -Wextra -Werror src/IEGORandomizer.Updater2DS/host_verify.c src/IEGORandomizer.Updater2DS/source/ie4p_core.c -o /tmp/ie4p_host_verify
 
-          EXTRA_ARGS=()
-          if [ -n "$INPUT_SEED" ]; then
-            EXTRA_ARGS+=(--seed "$INPUT_SEED")
-          fi
-          if [ "$OVER_VANILLA" = "true" ]; then
-            EXTRA_ARGS+=(--delta-over-vanilla)
-          fi
-
-          PACK_FILE="$PWD/src/IEGORandomizer.Updater2DS/romfs/patch_v123.ie4p"
-          dotnet run --project src/IEGORandomizer.App/IEGORandomizer.App.csproj --configuration Release --no-build -- \
-            --cli \
-            --input "$SRC_INPUT" \
-            --output /tmp/cia_work/patched_out \
-            --preset "$INPUT_PRESET" \
-            "${EXTRA_ARGS[@]}" \
-            --export-2ds-delta-pack "$PACK_FILE"
-
-          ls -lh "$PACK_FILE"
-
-          # Cold-verify C99 streaming engine against target patched ie_a.fa if input was ie_a.fa
-          TARGET_FA=$(find /tmp/cia_work/patched_out -name "ie_a.fa" | head -n 1)
-          if [ -f "/tmp/cia_work/ie_a.fa" ] && [ -n "$TARGET_FA" ]; then
-            gcc -std=c99 -O2 -Wall -Wextra -Werror src/IEGORandomizer.Updater2DS/host_verify.c src/IEGORandomizer.Updater2DS/source/ie4p_core.c -o /tmp/ie4p_host_verify
-            /tmp/ie4p_host_verify /tmp/cia_work/ie_a.fa "$PACK_FILE" /tmp/cia_work/reconstructed_check.fa
-            ORIG_TARGET_SHA=$(sha256sum "$TARGET_FA" | awk '{print $1}')
-            RECON_SHA=$(sha256sum /tmp/cia_work/reconstructed_check.fa | awk '{print $1}')
-            echo "Target SHA-256       : $ORIG_TARGET_SHA"
-            echo "Reconstructed SHA-256: $RECON_SHA"
-            test "$ORIG_TARGET_SHA" = "$RECON_SHA"
-            rm -f /tmp/cia_work/reconstructed_check.fa
-          fi
-          rm -rf /tmp/cia_work
-
-          # 1) Compile ARM11 2DS ELF + SMDH icon inside official devkitpro/devkitarm container
-          docker run --rm -v "$PWD/src/IEGORandomizer.Updater2DS:/work" -w /work devkitpro/devkitarm:latest \
-            bash -lc "make clean && make -j4 && ls -lh updater_2ds.elf updater_2ds.smdh"
-
-          # 2) Build CTR makerom and package standalone installable 2DS .CIA
           git clone --depth 1 https://github.com/3DSGuy/Project_CTR.git /tmp/makerom_src
           make -C /tmp/makerom_src/makerom deps -j4
           make -C /tmp/makerom_src/makerom -j4
 
-          OUT_CIA="/tmp/cia_out/InazumaElevenGO_Luz_ParcheLigero_v1.2.3_2DS.cia"
+          # Compile ARM11 2DS ELF + SMDH icon once inside official devkitpro/devkitarm container
+          docker run --rm -v "$PWD/src/IEGORandomizer.Updater2DS:/work" -w /work devkitpro/devkitarm:latest \
+            bash -c 'export DEVKITPRO=/opt/devkitpro DEVKITARM=/opt/devkitpro/devkitARM PATH=/opt/devkitpro/tools/bin:/opt/devkitpro/devkitARM/bin:$PATH && make clean && make -j4 && ls -lh updater_2ds.elf updater_2ds.smdh'
+
+          # =========================================================================
+          # 1) Build ULTRA-LIGHTWEIGHT SURGICAL REPAIR .CIA (~2-4 MB) over _Randomizado.cia
+          # =========================================================================
+          REPAIR_PACK="$PWD/src/IEGORandomizer.Updater2DS/romfs/patch_v123.ie4p"
+          IE4P_EXPORT_INSTALLED_BASE=1 dotnet run --project src/IEGORandomizer.App/IEGORandomizer.App.csproj --configuration Release --no-build -- \
+            --cli \
+            --repair-installed /tmp/cia_work/installed_randomizado.cia \
+            --clean-reference /tmp/cia_work/clean_retail.cia \
+            --output /tmp/cia_work/repaired_v123_ie_a.fa \
+            --export-2ds-delta-pack "$REPAIR_PACK"
+
+          ls -lh "$REPAIR_PACK"
+
+          # Cold-verify exact C99 engine reconstruction over the user's REAL _Randomizado ie_a.fa!
+          INSTALLED_FA="/tmp/cia_work/repaired_v123_ie_a.fa.installed_base.fa"
+          /tmp/ie4p_host_verify "$INSTALLED_FA" "$REPAIR_PACK" /tmp/cia_work/recon_repair.fa
+          SHA_EXPECTED=$(sha256sum /tmp/cia_work/repaired_v123_ie_a.fa | awk '{print $1}')
+          SHA_ACTUAL=$(sha256sum /tmp/cia_work/recon_repair.fa | awk '{print $1}')
+          echo "Surgical Repair Target SHA-256 : $SHA_EXPECTED"
+          echo "Surgical Repair Recon  SHA-256 : $SHA_ACTUAL"
+          test "$SHA_EXPECTED" = "$SHA_ACTUAL"
+          rm -f /tmp/cia_work/recon_repair.fa /tmp/cia_work/repaired_v123_ie_a.fa
+
+          REPAIR_CIA="/tmp/cia_out/InazumaElevenGO_Luz_ParcheReparacion_PartidaActual_v1.2.3_2DS.cia"
           (
             cd src/IEGORandomizer.Updater2DS
             /tmp/makerom_src/makerom/bin/makerom \
               -f cia \
-              -o "$OUT_CIA" \
+              -o "$REPAIR_CIA" \
               -rsf app.rsf \
               -elf updater_2ds.elf \
               -icon updater_2ds.smdh \
               -ver 1059
           )
+          dotnet run --project src/IEGORandomizer.App/IEGORandomizer.App.csproj --configuration Release --no-build -- --inspect-cia "$REPAIR_CIA"
 
-          ls -lh "$OUT_CIA"
-          # Cold-inspect the generated .CIA using our own 3DS CIA inspector
+          # =========================================================================
+          # 2) Build FRESH FULL-RANDOM SEED .CIA (~50 MB) ALSO over _Randomizado.cia
+          # =========================================================================
+          rm -f "$REPAIR_PACK"
           dotnet run --project src/IEGORandomizer.App/IEGORandomizer.App.csproj --configuration Release --no-build -- \
-            --inspect-cia "$OUT_CIA"
+            --cli \
+            --input /tmp/cia_work/clean_retail.cia \
+            --output /tmp/cia_work/fresh_v123_out \
+            --preset "$INPUT_PRESET" \
+            --seed "$FRESH_SEED" \
+            --delta-against "$INSTALLED_FA" \
+            --export-2ds-delta-pack "$REPAIR_PACK"
 
-          (cd /tmp/cia_out && sha256sum "InazumaElevenGO_Luz_ParcheLigero_v1.2.3_2DS.cia" > SHA256SUMS.txt)
+          ls -lh "$REPAIR_PACK"
+          FRESH_TARGET_FA=$(find /tmp/cia_work/fresh_v123_out -name "ie_a.fa" | head -n 1)
+          /tmp/ie4p_host_verify "$INSTALLED_FA" "$REPAIR_PACK" /tmp/cia_work/recon_fresh.fa
+          SHA_FRESH_EXP=$(sha256sum "$FRESH_TARGET_FA" | awk '{print $1}')
+          SHA_FRESH_ACT=$(sha256sum /tmp/cia_work/recon_fresh.fa | awk '{print $1}')
+          echo "Fresh Seed Target SHA-256 : $SHA_FRESH_EXP"
+          echo "Fresh Seed Recon  SHA-256 : $SHA_FRESH_ACT"
+          test "$SHA_FRESH_EXP" = "$SHA_FRESH_ACT"
+          rm -rf /tmp/cia_work
+
+          FRESH_CIA="/tmp/cia_out/InazumaElevenGO_Luz_NuevaSemilla_TodoActivado_v1.2.3_2DS.cia"
+          (
+            cd src/IEGORandomizer.Updater2DS
+            cp app.rsf app_fresh.rsf
+            sed -i 's/0xFF1E4/0xFF1E5/g; s/0x000400000FF1E400L/0x000400000FF1E500L/g; s/CTR-P-IE4U/CTR-P-IE4N/g' app_fresh.rsf
+            /tmp/makerom_src/makerom/bin/makerom \
+              -f cia \
+              -o "$FRESH_CIA" \
+              -rsf app_fresh.rsf \
+              -elf updater_2ds.elf \
+              -icon updater_2ds.smdh \
+              -ver 1059
+            rm -f app_fresh.rsf
+          )
+          dotnet run --project src/IEGORandomizer.App/IEGORandomizer.App.csproj --configuration Release --no-build -- --inspect-cia "$FRESH_CIA"
+
+          ls -lh /tmp/cia_out/*.cia
+          (cd /tmp/cia_out && sha256sum *.cia > SHA256SUMS.txt)
           cat /tmp/cia_out/SHA256SUMS.txt
 
-      - name: Upload Lightweight 2DS .CIA + FBI QR Code to GitHub Releases
+      - name: Upload Both Lightweight 2DS .CIA Files + FBI QR Codes to GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
           REPO_SLUG: ${{ github.repository }}
         run: |
-          if [ ! -f /tmp/cia_out/InazumaElevenGO_Luz_ParcheLigero_v1.2.3_2DS.cia ]; then
-            echo "Nothing to upload."
+          REPAIR_NAME="InazumaElevenGO_Luz_ParcheReparacion_PartidaActual_v1.2.3_2DS.cia"
+          FRESH_NAME="InazumaElevenGO_Luz_NuevaSemilla_TodoActivado_v1.2.3_2DS.cia"
+          REPAIR_CIA="/tmp/cia_out/${REPAIR_NAME}"
+          FRESH_CIA="/tmp/cia_out/${FRESH_NAME}"
+          if [ ! -f "$REPAIR_CIA" ]; then
+            echo "No .CIA output to publish."
             exit 0
           fi
+
           REL_TAG=$(jq -r '.releaseTag // "v1.2.3-2ds-patch"' .cia-build-request.json)
-          OUT_CIA="/tmp/cia_out/InazumaElevenGO_Luz_ParcheLigero_v1.2.3_2DS.cia"
-          CIA_NAME="InazumaElevenGO_Luz_ParcheLigero_v1.2.3_2DS.cia"
-          DIRECT_URL="https://github.com/${REPO_SLUG}/releases/download/${REL_TAG}/${CIA_NAME}"
+          FRESH_SEED=$(jq -r '.freshSeed // "IEGO-LUZ-V123-2DS"' .cia-build-request.json)
 
-          python3 -c "import qrcode; qrcode.make('${DIRECT_URL}').save('/tmp/cia_out/QR_Instalar_En_FBI_2DS.png')"
+          URL_REPAIR="https://github.com/${REPO_SLUG}/releases/download/${REL_TAG}/${REPAIR_NAME}"
+          URL_FRESH="https://github.com/${REPO_SLUG}/releases/download/${REL_TAG}/${FRESH_NAME}"
 
-          SIZE_MB=$(du -m "$OUT_CIA" | awk '{print $1}')
+          python3 -c "import qrcode; qrcode.make('${URL_REPAIR}').save('/tmp/cia_out/QR_FBI_RepararPartidaActual_v1.2.3.png')"
+          python3 -c "import qrcode; qrcode.make('${URL_FRESH}').save('/tmp/cia_out/QR_FBI_NuevaSemilla_v1.2.3.png')"
+
+          REPAIR_MB=$(awk "BEGIN {printf \"%.1f\", $(stat -c%s "$REPAIR_CIA")/1048576}")
+          FRESH_MB=$(awk "BEGIN {printf \"%.1f\", $(stat -c%s "$FRESH_CIA")/1048576}")
           NOTES_FILE="/tmp/cia_out/RELEASE_NOTES.md"
-          python3 src/IEGORandomizer.Updater2DS/write_release_notes.py "$NOTES_FILE" "$SIZE_MB" "$CIA_NAME"
+          python3 src/IEGORandomizer.Updater2DS/write_release_notes.py \
+            "$NOTES_FILE" "$REPAIR_MB" "$REPAIR_NAME" "$FRESH_MB" "$FRESH_NAME" "$FRESH_SEED"
 
           if gh release view "$REL_TAG" >/dev/null 2>&1; then
-            gh release upload "$REL_TAG" "$OUT_CIA" /tmp/cia_out/QR_Instalar_En_FBI_2DS.png /tmp/cia_out/SHA256SUMS.txt --clobber
+            gh release upload "$REL_TAG" \
+              "$REPAIR_CIA" \
+              "$FRESH_CIA" \
+              /tmp/cia_out/QR_FBI_RepararPartidaActual_v1.2.3.png \
+              /tmp/cia_out/QR_FBI_NuevaSemilla_v1.2.3.png \
+              /tmp/cia_out/SHA256SUMS.txt \
+              --clobber
             gh release edit "$REL_TAG" --title "Parche Ligero Independiente .CIA para 2DS (v1.2.3)" --notes-file "$NOTES_FILE"
           else
-            gh release create "$REL_TAG" "$OUT_CIA" /tmp/cia_out/QR_Instalar_En_FBI_2DS.png /tmp/cia_out/SHA256SUMS.txt \
+            gh release create "$REL_TAG" \
+              "$REPAIR_CIA" \
+              "$FRESH_CIA" \
+              /tmp/cia_out/QR_FBI_RepararPartidaActual_v1.2.3.png \
+              /tmp/cia_out/QR_FBI_NuevaSemilla_v1.2.3.png \
+              /tmp/cia_out/SHA256SUMS.txt \
               --target arena/799dcf14-lynx \
               --title "Parche Ligero Independiente .CIA para 2DS (v1.2.3)" \
               --notes-file "$NOTES_FILE"

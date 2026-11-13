@@ -5,6 +5,7 @@ using IEGORandomizer.Engine;
 using IEGORandomizer.Engine.Cia;
 using IEGORandomizer.Engine.Configuration;
 using IEGORandomizer.Engine.Diagnostics;
+using IEGORandomizer.Engine.Repair;
 using Lynx.Core.RomFs;
 
 namespace IEGORandomizer.App
@@ -22,6 +23,8 @@ namespace IEGORandomizer.App
             string inspectCiaPath = null;
             string mergeSourceCiaPath = null;
             string mergeRomFsDir = null;
+            string repairInstalledPath = null;
+            string cleanReferencePath = null;
             string exportDiagJsonPath = null;
             string configJsonPath = null;
             bool diagnoseMode = false;
@@ -125,6 +128,18 @@ namespace IEGORandomizer.App
                     case "--delta-over-vanilla":
                         options.Export.AssumePriorRandomizedInstallForDeltaPack = false;
                         break;
+                    case "--delta-against":
+                        if (i + 1 < args.Length)
+                            options.Export.DeltaPatchInstalledBaselinePath = args[++i];
+                        break;
+                    case "--repair-installed":
+                        if (i + 1 < args.Length)
+                            repairInstalledPath = args[++i];
+                        break;
+                    case "--clean-reference":
+                        if (i + 1 < args.Length)
+                            cleanReferencePath = args[++i];
+                        break;
                     case "--preset":
                         if (i + 1 < args.Length)
                         {
@@ -204,6 +219,45 @@ namespace IEGORandomizer.App
             {
                 string targetMergeCia = !string.IsNullOrWhiteSpace(outputCiaPath) ? outputCiaPath : outputDir;
                 return RunMergeCiaCli(mergeSourceCiaPath, mergeRomFsDir, targetMergeCia, options.AesKeysPath, options.Cia);
+            }
+
+            if (!string.IsNullOrWhiteSpace(repairInstalledPath))
+            {
+                if (string.IsNullOrWhiteSpace(cleanReferencePath) || string.IsNullOrWhiteSpace(outputDir))
+                {
+                    Console.Error.WriteLine("Error: --repair-installed requiere --clean-reference <base_limpia> y --output <repaired_ie_a.fa>.");
+                    return 2;
+                }
+                try
+                {
+                    Console.WriteLine("================================================================");
+                    Console.WriteLine("  IEGO RANDOMIZER v1.2.3 — REPARACIÓN QUIRÚRGICA DE CONSOLA 2DS");
+                    Console.WriteLine("================================================================");
+                    var rep = InstalledV122RepairService.RepairAndBuildDeltaPack(
+                        repairInstalledPath,
+                        cleanReferencePath,
+                        outputDir,
+                        options.Export.Export2dsDeltaPatchPackPath,
+                        options.AesKeysPath);
+
+                    Console.WriteLine($"  item_config ITEM_REF restaurado : {rep.RebuiltItemConfigPreservingRefs}");
+                    Console.WriteLine($"  system_text 3-col restaurados   : {rep.RepairedSystemTextFilesCount}");
+                    Console.WriteLine($"  NPCs/cinemáticas sincronizados  : {rep.RestoredMapNpcHeadsCount}");
+                    Console.WriteLine($"  Caras waza cnXXXX sincronizadas : {rep.SyncedCnWazaFacesCount}");
+                    Console.WriteLine($"  Rig cp0010 (Victor 903) fijado  : {rep.RepairedVictorCp0010BodyRig}");
+                    Console.WriteLine($"  Ítems dummy de equipos limpiados: {rep.SanitizedDummyTeamItemsCount}");
+                    if (rep.DeltaPack != null)
+                    {
+                        Console.WriteLine($"  Paquete ligero 2DS IE4P         : {rep.DeltaPack.OutputPackPath} ({rep.DeltaPack.PackSizeBytes / 1024.0:F1} KB)");
+                        Console.WriteLine($"  Archivos reutilizados en 2DS    : {rep.DeltaPack.ReusedInstalledFiles} / {rep.DeltaPack.TotalFileEntries}");
+                    }
+                    return 0;
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[ERROR REPARACIÓN] {ex}");
+                    return 1;
+                }
             }
 
             if (!string.IsNullOrWhiteSpace(configJsonPath) && File.Exists(configJsonPath))
