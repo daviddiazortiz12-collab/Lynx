@@ -264,7 +264,11 @@ static int32_t pool_pick_diff(const int_pool_view_t *p, int32_t cur_val, sm64_rn
             return cand;
         }
     }
-    return pool_at(p, rng_bound(rng, p->count));
+    for (uint32_t i = 0; i < p->count; i++) {
+        int32_t cand = pool_at(p, i);
+        if (cand != cur_val) return cand;
+    }
+    return cur_val;
 }
 
 typedef struct {
@@ -278,7 +282,7 @@ static int patch_tpl_i32(tpl_view_t *tpls, uint32_t tpl_cnt, uint32_t tpl_idx, u
     if (off == 0xFFFFFFFFU) {
         return 0;
     }
-    if (tpl_idx >= tpl_cnt || off + 4U > tpls[tpl_idx].len) {
+    if (tpl_idx >= tpl_cnt || tpls[tpl_idx].len < 4U || off > tpls[tpl_idx].len - 4U) {
         return -1;
     }
     wr_i32(tpls[tpl_idx].bytes + off, val);
@@ -1332,11 +1336,20 @@ ie4p_status_t ie4p_apply_onconsole_seed_reader(
             uint32_t ctpl = rd_u32(cr + 0U);
             uint32_t loff = rd_u32(cr + 4U);
             uint32_t soff = rd_u32(cr + 8U);
-            int32_t item = pool_pick(&p_chests, &ch_rng, 0);
-            if (patch_tpl_i32(tpls, tpl_cnt, ctpl, loff, item) != 0 ||
-                patch_tpl_i32(tpls, tpl_cnt, ctpl, soff, item) != 0) {
-                st = IE4P_ERR_BAD_PACK;
-                goto cleanup;
+            const uint32_t offsets[2] = { loff, soff };
+            for (int side = 0; side < 2; side++) {
+                uint32_t off = offsets[side];
+                if (off == 0xFFFFFFFFU) continue;
+                if (ctpl >= tpl_cnt || tpls[ctpl].len < 4U || off > tpls[ctpl].len - 4U) {
+                    st = IE4P_ERR_BAD_PACK;
+                    goto cleanup;
+                }
+                int32_t old_item = rd_i32(tpls[ctpl].bytes + off);
+                int32_t item = pool_pick_diff(&p_chests, old_item, &ch_rng);
+                if (patch_tpl_i32(tpls, tpl_cnt, ctpl, off, item) != 0) {
+                    st = IE4P_ERR_BAD_PACK;
+                    goto cleanup;
+                }
             }
         }
     }

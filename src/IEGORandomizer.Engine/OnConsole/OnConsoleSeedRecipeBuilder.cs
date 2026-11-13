@@ -774,7 +774,7 @@ namespace IEGORandomizer.Engine.OnConsole
                 {
                     var vars = tpNodes[r].Item.Variables;
                     if (vars.Count <= 26) continue;
-                    foreach (int col in new[] { 14, 20, 25, 26 })
+                    foreach (int col in new[] { 9, 10, 11, 12, 13, 14, 20, 22, 25, 26 })
                     {
                         tpVarMap[(r, col)] = tpVars.Count;
                         tpVars.Add(vars[col]);
@@ -838,6 +838,87 @@ namespace IEGORandomizer.Engine.OnConsole
 
                 var mapSpawnSpecs = new List<MapSpawnSpec>();
                 var chestSpecs = new List<ChestSpec>();
+
+                // Reuse the reward-offset records for nonempty, non-story team drops.
+                for (int r = 0; r < tpEntries.Count && r < tpNodes.Count; r++)
+                {
+                    var tp = tpEntries[r];
+                    if (tp.TeamParamID == 0 || protection.ScriptedTeamParamHashes.Contains(tp.TeamParamID) ||
+                        (tp.TeamConfigID != 0 && protection.ScriptedTeamConfigHashes.Contains(tp.TeamConfigID)))
+                        continue;
+                    int[] cols = { 9, 10, 11, 12, 13, 22 };
+                    for (int slot = 1; slot <= 6; slot++)
+                    {
+                        int item = TeamSlotAccessor.GetTeamDrop(tp, slot);
+                        int col = cols[slot - 1];
+                        if (item == 0 || protection.IsProtectedItem(item) || !tpVarMap.ContainsKey((r, col)))
+                            continue;
+                        chestSpecs.Add(new ChestSpec {
+                            TemplateIdx = (uint)tpTpl.TemplateIndex,
+                            LightItemOffset = (uint)tpOffsets[tpVarMap[(r, col)]],
+                            ShadowItemOffset = 0xFFFFFFFFu
+                        });
+                    }
+                }
+
+                // Competition-route chests and shops are separate CFG files. Protect
+                // key items and route requirements, and never modify non-chest cells.
+                var soccerDirForRewards = cleanGame.GetDirectory("soccer");
+                if (soccerDirForRewards != null)
+                {
+                    foreach (string name in soccerDirForRewards.Files.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                    {
+                        if (!name.EndsWith(".cfg.bin", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(name, "soccer_config.cfg.bin", StringComparison.OrdinalIgnoreCase) ||
+                            !RouteDataService.TryReadRouteFile(soccerDirForRewards, name, out var route))
+                            continue;
+                        string path = NormalizeVirtPath("/data/res/soccer/" + name);
+                        if (!cleanArc.SlotByPath.ContainsKey(path)) continue;
+                        var cfg = OpenCfgFromClean(cleanGame.IE_A.Directory, "/" + path);
+                        var nodes = FindNodesByPrefix(cfg.Entries, "ROUTE_CONFIG");
+                        var vars = new List<Variable>();
+                        foreach (var cell in route.Cells)
+                        {
+                            if ((cell.CellType != 3 && cell.CellType != 4) || cell.ContentID == 0 ||
+                                protection.IsProtectedItem(cell.ContentID) || cell.NodeIndex < 0 ||
+                                cell.NodeIndex >= nodes.Count || nodes[cell.NodeIndex].Item.Variables.Count <= 2)
+                                continue;
+                            vars.Add(nodes[cell.NodeIndex].Item.Variables[2]);
+                        }
+                        if (vars.Count == 0) continue;
+                        int[] offsets = LocateIntVariablesTwoPass(cfg, vars, out byte[] bytes);
+                        var tpl = RegisterTemplate("/" + path, bytes);
+                        foreach (int offset in offsets)
+                            chestSpecs.Add(new ChestSpec { TemplateIdx = (uint)tpl.TemplateIndex,
+                                LightItemOffset = (uint)offset, ShadowItemOffset = 0xFFFFFFFFu });
+                    }
+                }
+                var shopDirForRewards = cleanGame.GetDirectory("shop");
+                if (shopDirForRewards != null)
+                {
+                    foreach (string name in ShopDataService.ListShopFiles(shopDirForRewards))
+                    {
+                        if (!ShopDataService.TryReadShopFile(shopDirForRewards, name, out var slots)) continue;
+                        string path = NormalizeVirtPath("/data/res/shop/" + name);
+                        if (!cleanArc.SlotByPath.ContainsKey(path)) continue;
+                        var cfg = OpenCfgFromClean(cleanGame.IE_A.Directory, "/" + path);
+                        var nodes = FindNodesByPrefix(cfg.Entries, "SHOP_CONFIG_INFO");
+                        var vars = new List<Variable>();
+                        foreach (var slot in slots)
+                        {
+                            if (slot.ItemID == 0 || protection.IsProtectedItem(slot.ItemID) ||
+                                slot.NodeIndex < 0 || slot.NodeIndex >= nodes.Count ||
+                                nodes[slot.NodeIndex].Item.Variables.Count == 0) continue;
+                            vars.Add(nodes[slot.NodeIndex].Item.Variables[0]);
+                        }
+                        if (vars.Count == 0) continue;
+                        int[] offsets = LocateIntVariablesTwoPass(cfg, vars, out byte[] bytes);
+                        var tpl = RegisterTemplate("/" + path, bytes);
+                        foreach (int offset in offsets)
+                            chestSpecs.Add(new ChestSpec { TemplateIdx = (uint)tpl.TemplateIndex,
+                                LightItemOffset = (uint)offset, ShadowItemOffset = 0xFFFFFFFFu });
+                    }
+                }
 
                 foreach (string mapVirtPath in mapFilesWithEdits)
                 {
