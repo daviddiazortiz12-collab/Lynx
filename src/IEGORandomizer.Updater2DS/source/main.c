@@ -357,7 +357,7 @@ static void draw_menu_screens(
 {
     consoleSelect(bottomScreen);
     consoleClear();
-    printf("\x1b[36;1m=== PARCELA TECNICA v1.2.5 (TODO EN 1) ===\x1b[0m\n");
+    printf("\x1b[36;1m=== PARCELA TECNICA v1.2.6 (TODO EN 1) ===\x1b[0m\n");
     printf("- Fix 0xD9004676 (PxiFS0 0x24 + DMA 4KB)\n");
     printf("- Fix crash Cap.1 Caballeros Templarios\n");
     printf("- Sprites 100%% coherentes (mapa/video)\n");
@@ -373,7 +373,7 @@ static void draw_menu_screens(
     consoleSelect(topScreen);
     consoleClear();
     printf("\x1b[36;1m================================================\n");
-    printf(" INAZUMA ELEVEN GO: LUZ - RANDOMIZER 2DS v1.2.5\n");
+    printf(" INAZUMA ELEVEN GO: LUZ - RANDOMIZER 2DS v1.2.6\n");
     printf(" Reparador + Generador de Seeds en Consola\n");
     printf("================================================\x1b[0m\n");
     printf(" \x1b[32;1m[OK]\x1b[0m Juego detectado (%s, %u MB)\n\n",
@@ -381,7 +381,7 @@ static void draw_menu_screens(
            (unsigned)(ie_a_bytes / (1024ULL * 1024ULL)));
     printf(" Elige que quieres hacer:\n\n");
     printf(" \x1b[32;1m[A]\x1b[0m REPARAR PARTIDA ACTUAL (Mantener mi Seed)\n");
-    printf("     Arregla todos los bugs sin perder tu save.\n\n");
+    printf("     Repara la partida instalada; conserva tu save.\n\n");
     printf(" \x1b[33;1m[X]\x1b[0m NUEVA SEED MANUAL (Teclado tactil 2DS)\n");
     printf("     Escribe la seed que quieras ('Todo Activado').\n\n");
     printf(" \x1b[35;1m[Y]\x1b[0m NUEVA SEED ALEATORIA (1 boton)\n");
@@ -560,7 +560,7 @@ int main(int argc, char **argv)
         printf(" Seed activa : \x1b[33;1m%s\x1b[0m\n", chosen_seed);
         printf(" Modo        : Todo Activado + Todos los Fixes\n\n");
     } else {
-        printf(" Modo        : Reparacion Quirurgica v1.2.5\n");
+        printf(" Modo        : Reparacion Quirurgica v1.2.6\n");
         printf(" Partida/Seed: 100%% conservadas\n\n");
     }
     printf(" Construyendo ie_a.fa en tarjeta SD...\n");
@@ -615,7 +615,7 @@ int main(int argc, char **argv)
     consoleSelect(&topScreen);
     printf("\x1b[22;1H\x1b[32;1m================================================\n");
     if (selected_mode == 1) {
-        printf("  PARTIDA REPARADA CON EXITO! (v1.2.5)\n");
+        printf("  PARTIDA REPARADA CON EXITO! (v1.2.6)\n");
     } else {
         printf("  SEED '%s' LISTA PARA JUGAR!\n", chosen_seed);
     }

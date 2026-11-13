@@ -41,7 +41,7 @@ jobs:
           dotnet build IEGORandomizer.sln --configuration Release
           dotnet run --project tests/IEGORandomizer.Tests/IEGORandomizer.Tests.csproj --configuration Release --no-build
 
-      - name: Build & Cold-Verify All-in-One v1.2.5 2DS Patcher + On-Console Seed Randomizer .CIA
+      - name: Build & Cold-Verify All-in-One v1.2.6 2DS Patcher + On-Console Seed Randomizer .CIA
         run: |
           exec > >(tee -a /tmp/cia_step.log) 2>&1
           trap 'rc=$?; if [ $rc -ne 0 ]; then echo "::error::Step failed (rc=$rc): $(tail -n 25 /tmp/cia_step.log | tr "\n" " " | cut -c1-900)"; fi' EXIT
@@ -97,7 +97,7 @@ jobs:
                 /work/source/main.c /work/source/pxi_romfs.c /work/source/ie4p_core.c /work/source/ie4p_seed.c /work/source/csvc.s \
                 -specs=3dsx.specs -L/opt/devkitpro/libctru/lib -lctru -lm \
                 -o /work/updater_2ds.elf
-              smdhtool --create "IEGO Luz Randomizer v1.2.5" \
+              smdhtool --create "IEGO Luz Randomizer v1.2.6" \
                 "Reparador + Generador de Seeds en Consola 2DS" \
                 "Lynx IEGO Randomizer" \
                 /work/icon.png /work/updater_2ds.smdh
@@ -114,19 +114,19 @@ jobs:
             --cli \
             --repair-installed /tmp/cia_work/installed_randomizado.cia \
             --clean-reference /tmp/cia_work/clean_retail.cia \
-            --output /tmp/cia_work/repaired_v125_ie_a.fa \
+            --output /tmp/cia_work/repaired_v126_ie_a.fa \
             --export-2ds-delta-pack "$REPAIR_PACK"
 
-          INSTALLED_FA="/tmp/cia_work/repaired_v125_ie_a.fa.installed_base.fa"
+          INSTALLED_FA="/tmp/cia_work/repaired_v126_ie_a.fa.installed_base.fa"
           ls -lh "$REPAIR_PACK" "$INSTALLED_FA"
 
           /tmp/ie4p_host_verify --pxi-cia /tmp/cia_work/installed_randomizado.cia "$REPAIR_PACK" /tmp/cia_work/recon_repair.fa
-          SHA_EXPECTED=$(sha256sum /tmp/cia_work/repaired_v125_ie_a.fa | awk '{print $1}')
+          SHA_EXPECTED=$(sha256sum /tmp/cia_work/repaired_v126_ie_a.fa | awk '{print $1}')
           SHA_ACTUAL=$(sha256sum /tmp/cia_work/recon_repair.fa | awk '{print $1}')
           echo "Surgical Repair Target SHA-256         : $SHA_EXPECTED"
           echo "PxiFS0 (0x24 + 4KB DMA) Recon SHA-256  : $SHA_ACTUAL"
           test "$SHA_EXPECTED" = "$SHA_ACTUAL"
-          rm -f /tmp/cia_work/recon_repair.fa /tmp/cia_work/repaired_v125_ie_a.fa
+          rm -f /tmp/cia_work/recon_repair.fa /tmp/cia_work/repaired_v126_ie_a.fa
 
           # =========================================================================
           # 2) Build & Cold-Verify Mode [X]/[Y]: On-Console Seed Recipe (seed_recipe.ie4r)
@@ -157,7 +157,7 @@ jobs:
           # =========================================================================
           # 3) Package Unified All-in-One .CIA (patch_repair.ie4p + seed_recipe.ie4r)
           # =========================================================================
-          ALL_CIA="/tmp/cia_out/InazumaElevenGO_Luz_ParcheYRandomizer_v1.2.5_2DS.cia"
+          ALL_CIA="/tmp/cia_out/InazumaElevenGO_Luz_ParcheYRandomizer_v1.2.6_2DS.cia"
           (
             cd src/IEGORandomizer.Updater2DS
             /tmp/makerom_src/makerom/bin/makerom \
@@ -166,7 +166,7 @@ jobs:
               -rsf app.rsf \
               -elf updater_2ds.elf \
               -icon updater_2ds.smdh \
-              -ver 1070
+              -ver 1071
           )
           dotnet run --project src/IEGORandomizer.App/IEGORandomizer.App.csproj --configuration Release --no-build -- --inspect-cia "$ALL_CIA"
 
@@ -174,22 +174,22 @@ jobs:
           (cd /tmp/cia_out && sha256sum *.cia > SHA256SUMS.txt)
           cat /tmp/cia_out/SHA256SUMS.txt
 
-      - name: Upload All-in-One v1.2.5 2DS .CIA + FBI QR Code to GitHub Releases
+      - name: Upload All-in-One v1.2.6 2DS .CIA + FBI QR Code to GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
           REPO_SLUG: ${{ github.repository }}
         run: |
-          CIA_NAME="InazumaElevenGO_Luz_ParcheYRandomizer_v1.2.5_2DS.cia"
+          CIA_NAME="InazumaElevenGO_Luz_ParcheYRandomizer_v1.2.6_2DS.cia"
           CIA_PATH="/tmp/cia_out/${CIA_NAME}"
           if [ ! -f "$CIA_PATH" ]; then
             echo "No .CIA output to publish."
             exit 0
           fi
 
-          REL_TAG=$(jq -r '.releaseTag // "v1.2.5-2ds-patch"' .cia-build-request.json)
+          REL_TAG=$(jq -r '.releaseTag // "v1.2.6-2ds-patch"' .cia-build-request.json)
           URL_CIA="https://github.com/${REPO_SLUG}/releases/download/${REL_TAG}/${CIA_NAME}"
 
-          /tmp/py/bin/python -c "import qrcode; qrcode.make('${URL_CIA}').save('/tmp/cia_out/QR_FBI_ParcheYRandomizer_v1.2.5.png')"
+          /tmp/py/bin/python -c "import qrcode; qrcode.make('${URL_CIA}').save('/tmp/cia_out/QR_FBI_ParcheYRandomizer_v1.2.6.png')"
 
           CIA_MB=$(awk "BEGIN {printf \"%.2f\", $(stat -c%s "$CIA_PATH")/1048576}")
           NOTES_FILE="/tmp/cia_out/RELEASE_NOTES.md"
@@ -198,16 +198,16 @@ jobs:
           if gh release view "$REL_TAG" >/dev/null 2>&1; then
             gh release upload "$REL_TAG" \
               "$CIA_PATH" \
-              /tmp/cia_out/QR_FBI_ParcheYRandomizer_v1.2.5.png \
+              /tmp/cia_out/QR_FBI_ParcheYRandomizer_v1.2.6.png \
               /tmp/cia_out/SHA256SUMS.txt \
               --clobber
-            gh release edit "$REL_TAG" --title "Parche + Randomizador de Seeds en Consola 2DS v1.2.5 (Todo-en-1)" --notes-file "$NOTES_FILE"
+            gh release edit "$REL_TAG" --title "Parche + Randomizador de Seeds en Consola 2DS v1.2.6 (Todo-en-1)" --notes-file "$NOTES_FILE"
           else
             gh release create "$REL_TAG" \
               "$CIA_PATH" \
-              /tmp/cia_out/QR_FBI_ParcheYRandomizer_v1.2.5.png \
+              /tmp/cia_out/QR_FBI_ParcheYRandomizer_v1.2.6.png \
               /tmp/cia_out/SHA256SUMS.txt \
               --target arena/799dcf14-lynx \
-              --title "Parche + Randomizador de Seeds en Consola 2DS v1.2.5 (Todo-en-1)" \
+              --title "Parche + Randomizador de Seeds en Consola 2DS v1.2.6 (Todo-en-1)" \
               --notes-file "$NOTES_FILE"
           fi

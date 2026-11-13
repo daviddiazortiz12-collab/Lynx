@@ -276,7 +276,7 @@ namespace IEGORandomizer.App
                 try
                 {
                     Console.WriteLine("================================================================");
-                    Console.WriteLine("  IEGO RANDOMIZER v1.2.5 — RECETA DE SEMILLA EN CONSOLA 2DS");
+                    Console.WriteLine("  IEGO RANDOMIZER v1.2.6 — RECETA DE SEMILLA EN CONSOLA 2DS");
                     Console.WriteLine("================================================================");
                     var rec = OnConsoleSeedRecipeBuilder.BuildRecipe(
                         inputPath,
