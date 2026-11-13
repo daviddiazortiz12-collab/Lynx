@@ -1,0 +1,27 @@
+name: Verify 2DS development
+on:
+  push:
+    branches: [arena/799dcf14-lynx]
+    paths:
+      - '.github/workflows/verify-2ds-development.yml'
+      - 'src/IEGORandomizer.Engine/OnConsole/**'
+      - 'src/IEGORandomizer.Updater2DS/source/**'
+      - 'tests/IEGORandomizer.Tests/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Enable NuGet
+        run: dotnet nuget add source https://api.nuget.org/v3/index.json --name nuget.org --configfile NuGet.Config
+      - name: Build
+        run: dotnet build IEGORandomizer.sln --configuration Release
+      - name: Run synthetic integration and C engine tests
+        run: dotnet run --project tests/IEGORandomizer.Tests/IEGORandomizer.Tests.csproj --configuration Release --no-build

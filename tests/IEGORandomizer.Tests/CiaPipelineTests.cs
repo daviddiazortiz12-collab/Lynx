@@ -10,6 +10,7 @@ using IEGORandomizer.Engine;
 using IEGORandomizer.Engine.Cia;
 using IEGORandomizer.Engine.Configuration;
 using Lynx.Core.Games;
+using Lynx.Core.Maps;
 using Lynx.Core.RomFs;
 using Lynx.Core.RomFs.Cia;
 
@@ -1604,6 +1605,45 @@ namespace IEGORandomizer.Tests
                 // Different seeds must produce different player stats/elements!
                 Assert.True(prms1.Zip(prms2).Any(pair => pair.First.Kick != pair.Second.Kick || pair.First.Element != pair.Second.Element),
                     "Different seeds on console must generate distinct stats and elements.");
+
+                // Exercise twenty independent seed inputs through the actual C engine and reopen
+                // every resulting archive. In particular, chest flag column 6 must never be
+                // mistaken for the Shadow reward (column 8).
+                var cleanChests = MapDataService.LoadAllTreasureChests(cleanCheck.IE_A.Directory)
+                    .ToDictionary(c => (c.VirtualFilePath, c.NodeIndex));
+                Assert.True(cleanChests.Count > 0, "Synthetic fixture must contain map chests.");
+                var seedDigests = new HashSet<string>();
+                bool sawFullyRandomStat = false;
+                var cleanPlayers = cleanCheck.GetCharaparams().GroupBy(p => p.ParamHash).ToDictionary(g => g.Key, g => g.First());
+                for (int trial = 0; trial < 20; trial++)
+                {
+                    string path = RunC99Seed($"REGRESSION-SEED-{trial:D2}", $"regression_{trial:D2}.fa");
+                    Assert.True(seedDigests.Add(CiaFormatInspector.ComputeStreamingFileSha256Hex(path)),
+                        $"Seed {trial} unexpectedly produced an identical archive.");
+                    using var game = new Lynx.Core.Games.SafeGOGame(path, "es");
+                    var chests = MapDataService.LoadAllTreasureChests(game.IE_A.Directory);
+                    Assert.Equal(cleanChests.Count, chests.Count);
+                    foreach (var chest in chests)
+                    {
+                        var original = cleanChests[(chest.VirtualFilePath, chest.NodeIndex)].Record;
+                        Assert.Equal(original.TBoxFlag, chest.Record.TBoxFlag, "Seed must never overwrite a chest flag.");
+                        if (original.ItemIDLight == 0) Assert.Equal(0, chest.Record.ItemIDLight);
+                        if (original.ItemIDShadow == 0) Assert.Equal(0, chest.Record.ItemIDShadow);
+                        if (original.TBoxFlag == 999)
+                        {
+                            Assert.Equal(original.ItemIDLight, chest.Record.ItemIDLight);
+                            Assert.Equal(original.ItemIDShadow, chest.Record.ItemIDShadow);
+                        }
+                    }
+                    foreach (var player in game.GetCharaparams())
+                    {
+                        if (cleanPlayers.TryGetValue(player.ParamHash, out var original) &&
+                            original.Kick > 20 && (player.Kick < original.Kick * 0.7 || player.Kick > original.Kick * 1.3))
+                            sawFullyRandomStat = true;
+                    }
+                    File.Delete(path);
+                }
+                Assert.True(sawFullyRandomStat, "Stats must not be restricted to 70–130% of their original values.");
             }
             finally
             {

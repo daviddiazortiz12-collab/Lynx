@@ -1126,17 +1126,19 @@ ie4p_status_t ie4p_apply_onconsole_seed_reader(
         }
 
         int32_t new_elem = rng_range_incl(&elem_rng, 1, 4);
-        int32_t n_fp   = scale_clamp(pw->fp, 80, 125, 75, 220, &stat_rng);
-        int32_t n_tp   = scale_clamp(pw->tp, 80, 125, 90, 210, &stat_rng);
-        int32_t n_kick = scale_clamp(pw->kick, 70, 130, 12, 180, &stat_rng);
-        int32_t n_drib = scale_clamp(pw->dribble, 70, 130, 12, 180, &stat_rng);
-        int32_t n_tech = scale_clamp(pw->tech, 70, 130, 12, 180, &stat_rng);
-        int32_t n_blk  = scale_clamp(pw->block, 70, 130, 12, 180, &stat_rng);
-        int32_t n_spd  = scale_clamp(pw->speed, 70, 130, 12, 180, &stat_rng);
-        int32_t n_sta  = scale_clamp(pw->stamina, 70, 130, 12, 180, &stat_rng);
-        int32_t n_cat  = scale_clamp(pw->catch_stat, 70, 130, 10, 180, &stat_rng);
-        int32_t n_lck  = scale_clamp(pw->luck, 70, 130, 10, 160, &stat_rng);
-        int32_t n_fre  = scale_clamp(pw->freedom, 75, 135, 15, 120, &stat_rng);
+        /* Draw each stat independently across its supported range, not around the clean value.
+         * Safety minima for goalkeepers and Arion still apply below. */
+        int32_t n_fp   = rng_range_incl(&stat_rng, 75, 220);
+        int32_t n_tp   = rng_range_incl(&stat_rng, 90, 210);
+        int32_t n_kick = rng_range_incl(&stat_rng, 12, 180);
+        int32_t n_drib = rng_range_incl(&stat_rng, 12, 180);
+        int32_t n_tech = rng_range_incl(&stat_rng, 12, 180);
+        int32_t n_blk  = rng_range_incl(&stat_rng, 12, 180);
+        int32_t n_spd  = rng_range_incl(&stat_rng, 12, 180);
+        int32_t n_sta  = rng_range_incl(&stat_rng, 12, 180);
+        int32_t n_cat  = rng_range_incl(&stat_rng, 10, 180);
+        int32_t n_lck  = rng_range_incl(&stat_rng, 10, 160);
+        int32_t n_fre  = rng_range_incl(&stat_rng, 15, 120);
 
         if (new_pos == 1 && n_cat < 24) {
             n_cat = rng_range_incl(&stat_rng, 24, 34);
@@ -1232,15 +1234,22 @@ ie4p_status_t ie4p_apply_onconsole_seed_reader(
             } else if ((sflags & 2U) != 0U && s > 0 && p_talent.count > 0U) {
                 chosen_pool = &p_talent;
             } else {
-                uint32_t roll = rng_bound(&skl_rng, 100U);
-                if (pw->orig_pos == 1 && !pw->is_pachanga_goal) {
-                    chosen_pool = (roll < 65U) ? &p_save : (roll < 85U ? &p_block : &p_dribble);
-                } else if (pw->orig_pos == 2) {
-                    chosen_pool = (roll < 65U) ? &p_shot : (roll < 85U ? &p_dribble : &p_block);
-                } else if (pw->orig_pos == 3) {
-                    chosen_pool = (roll < 50U) ? &p_dribble : (roll < 80U ? &p_shot : &p_block);
-                } else {
-                    chosen_pool = (roll < 60U) ? &p_block : (roll < 85U ? &p_dribble : &p_shot);
+                /* Randomize active techniques independently of player position.
+                 * Saves remain excluded for street-only goal defenders. */
+                const int_pool_view_t *pools[4] = { &p_shot, &p_dribble, &p_block, &p_save };
+                uint32_t total = p_shot.count + p_dribble.count + p_block.count +
+                                 (pw->is_pachanga_goal ? 0U : p_save.count);
+                if (total > 0U) {
+                    uint32_t roll = rng_bound(&skl_rng, total);
+                    for (int category = 0; category < 4; category++) {
+                        uint32_t count = (category == 3 && pw->is_pachanga_goal)
+                            ? 0U : pools[category]->count;
+                        if (roll < count) {
+                            chosen_pool = pools[category];
+                            break;
+                        }
+                        roll -= count;
+                    }
                 }
             }
 

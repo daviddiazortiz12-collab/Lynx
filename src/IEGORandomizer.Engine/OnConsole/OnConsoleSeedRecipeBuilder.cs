@@ -903,8 +903,13 @@ namespace IEGORandomizer.Engine.OnConsole
 
                             var vars = tboxNodes[ch.NodeIndex].Item.Variables;
                             if (vars.Count < 9) continue;
-                            int lIdx = mVars.Count; mVars.Add(vars[5]);
-                            int sIdx = mVars.Count; mVars.Add(vars[6]);
+                            // Column 6 is TBoxFlag, NOT the Shadow item (column 8).
+                            // Keep absent rewards empty rather than creating new ones.
+                            int lIdx = -1;
+                            int sIdx = -1;
+                            if (ch.Record.ItemIDLight != 0) { lIdx = mVars.Count; mVars.Add(vars[5]); }
+                            if (ch.Record.ItemIDShadow != 0) { sIdx = mVars.Count; mVars.Add(vars[8]); }
+                            if (lIdx < 0 && sIdx < 0) continue;
                             localChestMappings.Add((lIdx, sIdx));
                         }
                     }
@@ -936,8 +941,8 @@ namespace IEGORandomizer.Engine.OnConsole
                         chestSpecs.Add(new ChestSpec
                         {
                             TemplateIdx = (uint)mTpl.TemplateIndex,
-                            LightItemOffset = (uint)mOffsets[lVi],
-                            ShadowItemOffset = (uint)mOffsets[sVi]
+                            LightItemOffset = lVi < 0 ? 0xFFFFFFFFu : (uint)mOffsets[lVi],
+                            ShadowItemOffset = sVi < 0 ? 0xFFFFFFFFu : (uint)mOffsets[sVi]
                         });
                     }
                 }
