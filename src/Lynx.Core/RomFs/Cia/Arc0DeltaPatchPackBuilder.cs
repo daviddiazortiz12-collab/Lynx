@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using StudioElevenLib.Level5.Archive.ARC0;
 using StudioElevenLib.Level5.Compression;
@@ -35,6 +36,7 @@ namespace Lynx.Core.RomFs.Cia
         public const byte OpCopyFromInstalled = 0;
         public const byte OpEmbeddedRaw = 1;
         public const byte OpEmbeddedLz4 = 2;
+        public const byte OpCopyInstalledSlot = 3;
 
         private sealed class IndexedArc0Entry
         {
@@ -213,16 +215,34 @@ namespace Lynx.Core.RomFs.Cia
                     // Prefix payload
                     bw.Write(storedPrefix);
 
+                    // When diffing against an exact known installed archive (assumePriorRandomizedInstall == false),
+                    // build a content-addressed SHA-256 index of all installed slots so swapped character face/model
+                    // files reuse existing bytes from their donor slot via OpCopyInstalledSlot (0 payload bytes!).
+                    Dictionary<(uint Size, string ShaHex), int> installedByDigest = null;
+                    if (!assumePriorRandomizedInstall)
+                    {
+                        installedByDigest = new Dictionary<(uint Size, string ShaHex), int>(retailIdx.EntriesByIndex.Length);
+                        for (int s = 0; s < retailIdx.EntriesByIndex.Length; s++)
+                        {
+                            var re = retailIdx.EntriesByIndex[s];
+                            if (re.FileSize < 32)
+                                continue;
+                            byte[] rBytes = ReadSlice(retailFs, re.AbsoluteOffset, checked((int)re.FileSize));
+                            string shaHex = Convert.ToHexString(SHA256.HashData(rBytes));
+                            installedByDigest.TryAdd((re.FileSize, shaHex), s);
+                        }
+                    }
+
                     // Operations stream:
                     // Each operation record header (24 bytes):
-                    // [0x00]       byte   OpType (0 = CopyFromInstalled, 1 = EmbeddedRaw, 2 = EmbeddedLz4)
+                    // [0x00]       byte   OpType (0 = CopyFromInstalled, 1 = EmbeddedRaw, 2 = EmbeddedLz4, 3 = CopyInstalledSlot)
                     // [0x01..0x04] reserved (0)
                     // [0x04..0x08] uint32 FileIndex (index into ARC0 FileEntries table)
                     // [0x08..0x0C] uint32 UncompressedLength
-                    // [0x0C..0x10] uint32 StoredLength (0 when OpCopyFromInstalled)
+                    // [0x0C..0x10] uint32 StoredLength (0 when OpCopyFromInstalled; donorSlotIdx when OpCopyInstalledSlot)
                     // [0x10..0x14] uint32 PostPaddingZeroBytes
                     // [0x14..0x18] uint32 ExpectedCrc32
-                    // Followed immediately by StoredLength bytes of payload.
+                    // Followed immediately by StoredLength bytes of payload (except OpCopyInstalledSlot which has 0 payload bytes).
                     for (int i = 0; i < orderedTarget.Length; i++)
                     {
                         var targetEntry = orderedTarget[i];
@@ -231,18 +251,34 @@ namespace Lynx.Core.RomFs.Cia
                         byte[] targetData = ReadSlice(targetFs, targetEntry.AbsoluteOffset, checked((int)targetEntry.FileSize));
                         uint targetCrc = ComputeCrc32(targetData);
 
-                        bool canReuseFromInstalled = false;
-                        if (!(assumePriorRandomizedInstall && CouldBeModifiedByPriorRandomizerVersion(targetEntry.VirtualPath)) &&
-                            retailEntry.FileSize == targetEntry.FileSize)
+                        bool canReuseSameSlot = false;
+                        int donorInstalledSlot = -1;
+                        if (!(assumePriorRandomizedInstall && CouldBeModifiedByPriorRandomizerVersion(targetEntry.VirtualPath)))
                         {
-                            byte[] retailData = ReadSlice(retailFs, retailEntry.AbsoluteOffset, checked((int)retailEntry.FileSize));
-                            if (retailData.AsSpan().SequenceEqual(targetData))
+                            if (retailEntry.FileSize == targetEntry.FileSize)
                             {
-                                canReuseFromInstalled = true;
+                                byte[] retailData = ReadSlice(retailFs, retailEntry.AbsoluteOffset, checked((int)retailEntry.FileSize));
+                                if (retailData.AsSpan().SequenceEqual(targetData))
+                                {
+                                    canReuseSameSlot = true;
+                                }
+                            }
+
+                            if (!canReuseSameSlot && installedByDigest != null && targetEntry.FileSize >= 32)
+                            {
+                                string tSha = Convert.ToHexString(SHA256.HashData(targetData));
+                                if (installedByDigest.TryGetValue((targetEntry.FileSize, tSha), out int candSlot))
+                                {
+                                    byte[] donorData = ReadSlice(retailFs, retailIdx.EntriesByIndex[candSlot].AbsoluteOffset, checked((int)targetEntry.FileSize));
+                                    if (donorData.AsSpan().SequenceEqual(targetData))
+                                    {
+                                        donorInstalledSlot = candSlot;
+                                    }
+                                }
                             }
                         }
 
-                        if (canReuseFromInstalled)
+                        if (canReuseSameSlot)
                         {
                             bw.Write(OpCopyFromInstalled);
                             bw.Write((byte)0);
@@ -251,6 +287,21 @@ namespace Lynx.Core.RomFs.Cia
                             bw.Write((uint)targetEntry.FileIndex);
                             bw.Write(targetEntry.FileSize);
                             bw.Write(0U);
+                            bw.Write(postPadding[i]);
+                            bw.Write(targetCrc);
+
+                            reusedCount++;
+                            reusedBytes += targetEntry.FileSize;
+                        }
+                        else if (donorInstalledSlot >= 0)
+                        {
+                            bw.Write(OpCopyInstalledSlot);
+                            bw.Write((byte)0);
+                            bw.Write((byte)0);
+                            bw.Write((byte)0);
+                            bw.Write((uint)targetEntry.FileIndex);
+                            bw.Write(targetEntry.FileSize);
+                            bw.Write((uint)donorInstalledSlot);
                             bw.Write(postPadding[i]);
                             bw.Write(targetCrc);
 
@@ -374,6 +425,18 @@ namespace Lynx.Core.RomFs.Cia
                             $"Installed entry #{fileIndex} size mismatch ({instEntry.FileSize} != {rawLen}).");
                     }
                     payload = ReadSlice(installedFs, instEntry.AbsoluteOffset, checked((int)rawLen));
+                }
+                else if (opType == OpCopyInstalledSlot)
+                {
+                    if (storedLen >= (uint)installedIdx.EntriesByIndex.Length)
+                        throw new InvalidDataException($"Donor slot {storedLen} out of range.");
+                    var donorEntry = installedIdx.EntriesByIndex[storedLen];
+                    if (donorEntry.FileSize != rawLen)
+                    {
+                        throw new InvalidDataException(
+                            $"Donor entry #{storedLen} size mismatch ({donorEntry.FileSize} != {rawLen}).");
+                    }
+                    payload = ReadSlice(installedFs, donorEntry.AbsoluteOffset, checked((int)rawLen));
                 }
                 else if (opType == OpEmbeddedRaw)
                 {

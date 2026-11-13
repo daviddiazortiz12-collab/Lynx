@@ -14,8 +14,8 @@ DATA            :=
 INCLUDES        := source
 ROMFS           := romfs
 
-APP_TITLE       := IEGO Luz Parche v1.2.3
-APP_DESCRIPTION := Actualizacion ligera v1.2.3 para 2DS (sin borrar partida)
+APP_TITLE       := IEGO Luz Randomizer v1.2.4
+APP_DESCRIPTION := Reparador + Generador de Seeds en Consola 2DS
 APP_AUTHOR      := Lynx IEGO Randomizer
 
 ARCH    := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
@@ -33,8 +33,9 @@ export VPATH    := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
 export DEPSDIR  := $(CURDIR)/$(BUILD)
 
 CFILES          := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
+SFILES          := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 export LD       := $(CC)
-export OFILES_SOURCES := $(CFILES:.c=.o)
+export OFILES_SOURCES := $(CFILES:.c=.o) $(SFILES:.s=.o)
 export OFILES   := $(OFILES_SOURCES)
 
 export INCLUDE  := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \

@@ -5,6 +5,7 @@ using IEGORandomizer.Engine;
 using IEGORandomizer.Engine.Cia;
 using IEGORandomizer.Engine.Configuration;
 using IEGORandomizer.Engine.Diagnostics;
+using IEGORandomizer.Engine.OnConsole;
 using IEGORandomizer.Engine.Repair;
 using Lynx.Core.RomFs;
 
@@ -25,6 +26,7 @@ namespace IEGORandomizer.App
             string mergeRomFsDir = null;
             string repairInstalledPath = null;
             string cleanReferencePath = null;
+            string buildSeedRecipePath = null;
             string exportDiagJsonPath = null;
             string configJsonPath = null;
             bool diagnoseMode = false;
@@ -139,6 +141,10 @@ namespace IEGORandomizer.App
                     case "--clean-reference":
                         if (i + 1 < args.Length)
                             cleanReferencePath = args[++i];
+                        break;
+                    case "--build-2ds-seed-recipe":
+                        if (i + 1 < args.Length)
+                            buildSeedRecipePath = args[++i];
                         break;
                     case "--preset":
                         if (i + 1 < args.Length)
@@ -256,6 +262,40 @@ namespace IEGORandomizer.App
                 catch (Exception ex)
                 {
                     Console.Error.WriteLine($"[ERROR REPARACIÓN] {ex}");
+                    return 1;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(buildSeedRecipePath))
+            {
+                if (string.IsNullOrWhiteSpace(inputPath) || string.IsNullOrWhiteSpace(cleanReferencePath))
+                {
+                    Console.Error.WriteLine("Error: --build-2ds-seed-recipe requiere --input <instalado_cia_o_fa> y --clean-reference <base_limpia>.");
+                    return 2;
+                }
+                try
+                {
+                    Console.WriteLine("================================================================");
+                    Console.WriteLine("  IEGO RANDOMIZER v1.2.4 — RECETA DE SEMILLA EN CONSOLA 2DS");
+                    Console.WriteLine("================================================================");
+                    var rec = OnConsoleSeedRecipeBuilder.BuildRecipe(
+                        inputPath,
+                        cleanReferencePath,
+                        buildSeedRecipePath,
+                        options.AesKeysPath);
+
+                    Console.WriteLine($"  Receta IE4RV100 generada        : {rec.OutputRecipePath}");
+                    Console.WriteLine($"  Tamaño comprimido / descomprim. : {rec.CompressedSizeBytes / 1024.0:F1} KB / {rec.UncompressedSizeBytes / 1024.0:F1} KB");
+                    Console.WriteLine($"  Slots reutilizados de consola   : {rec.ReusedInstalledSlotsCount} / {rec.TotalArc0Entries}");
+                    Console.WriteLine($"  Plantillas mutables / blobs     : {rec.MutableTemplatesCount} / {rec.EmbeddedFallbackBlobsCount}");
+                    Console.WriteLine($"  Identidades visuales swapables  : {rec.VisualSwapMembersCount}");
+                    Console.WriteLine($"  Jugadores / Equipos 11v11 / 5v5 : {rec.PlayablePlayersCount} / {rec.StoryTeamsCount} / {rec.EncountTeamsCount}");
+                    Console.WriteLine($"  Spawns mapa / PalPack / Cofres  : {rec.MapSpawnsCount} / {rec.PalpackCardsCount} / {rec.TreasureChestsCount}");
+                    return 0;
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[ERROR RECETA 2DS] {ex}");
                     return 1;
                 }
             }

@@ -1,5 +1,5 @@
 BasicInfo:
-  Title                   : "IEGO Luz Parche v1.2.3"
+  Title                   : "IEGO Luz Randomizer v1.2.4"
   CompanyCode             : "00"
   ProductCode             : "CTR-P-IE4U"
   ContentType             : Application
@@ -8,7 +8,7 @@ BasicInfo:
 TitleInfo:
   UniqueId                : 0xFF1E4
   Category                : Application
-  Version                 : 0
+  Version                 : 1
 
 Option:
   UseOnSD                 : true

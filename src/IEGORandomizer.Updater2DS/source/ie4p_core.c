@@ -3,17 +3,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define ARC0_MAGIC_LE 0x30435241U /* "ARC0" */
+#define ARC0_MAGIC_LE          0x30435241U /* "ARC0" */
 #define IE4P_OP_COPY_INSTALLED 0U
 #define IE4P_OP_EMBEDDED_RAW   1U
 #define IE4P_OP_EMBEDDED_LZ4   2U
+#define IE4P_OP_COPY_SLOT      3U
 
 #define STREAM_CHUNK_SIZE (256U * 1024U)
-
-typedef struct {
-    uint32_t file_offset_in_data;
-    uint32_t file_size;
-} arc0_slot_t;
 
 static uint16_t read_u16_le(const uint8_t *p)
 {
@@ -43,7 +39,7 @@ static void set_err(char *buf, size_t cap, const char *msg)
 static uint32_t crc32_table[256];
 static int crc32_ready = 0;
 
-static void init_crc32_table(void)
+void ie4p_crc32_init(void)
 {
     if (crc32_ready) {
         return;
@@ -58,7 +54,7 @@ static void init_crc32_table(void)
     crc32_ready = 1;
 }
 
-static uint32_t crc32_update(uint32_t crc_inv, const uint8_t *data, size_t len)
+uint32_t ie4p_crc32_update(uint32_t crc_inv, const uint8_t *data, size_t len)
 {
     uint32_t c = crc_inv;
     for (size_t i = 0; i < len; i++) {
@@ -95,6 +91,40 @@ static int write_exact(FILE *f, const void *buf, size_t len)
     return 0;
 }
 
+static int stdio_file_read_at(void *ctx, uint64_t offset, void *dst, size_t len)
+{
+    if (len == 0U) {
+        return 0;
+    }
+    FILE *fp = (FILE *)ctx;
+    if (fp == NULL || offset > 0x7FFFFFFFULL) {
+        return -1;
+    }
+    if (fseek(fp, (long)offset, SEEK_SET) != 0) {
+        return -1;
+    }
+    return read_exact(fp, dst, len);
+}
+
+void ie4p_init_file_reader(ie4p_reader_t *out_reader, FILE *fp, uint64_t total_size)
+{
+    if (out_reader == NULL) {
+        return;
+    }
+    if (total_size == 0ULL && fp != NULL) {
+        if (fseek(fp, 0L, SEEK_END) == 0) {
+            long sz = ftell(fp);
+            if (sz > 0L) {
+                total_size = (uint64_t)sz;
+            }
+            fseek(fp, 0L, SEEK_SET);
+        }
+    }
+    out_reader->ctx = fp;
+    out_reader->total_size = total_size;
+    out_reader->read_at = stdio_file_read_at;
+}
+
 /* Decompress Level-5 table container (method 0 = None, method 1 = LZ10). */
 static ie4p_status_t decompress_level5_table(
     const uint8_t *src,
@@ -102,7 +132,7 @@ static ie4p_status_t decompress_level5_table(
     uint8_t **out_buf,
     size_t *out_len)
 {
-    if (src_len < 4) {
+    if (src_len < 4U) {
         return IE4P_ERR_LZ10;
     }
 
@@ -110,7 +140,7 @@ static ie4p_status_t decompress_level5_table(
     uint32_t method = hdr & 0x7U;
     size_t dst_size = (size_t)(hdr >> 3);
 
-    uint8_t *dst = (uint8_t *)malloc(dst_size > 0 ? dst_size : 1U);
+    uint8_t *dst = (uint8_t *)malloc(dst_size > 0U ? dst_size : 1U);
     if (dst == NULL) {
         return IE4P_ERR_OOM;
     }
@@ -179,7 +209,7 @@ static ie4p_status_t decompress_level5_table(
     return IE4P_OK;
 }
 
-static ie4p_status_t decompress_lz4_raw(
+ie4p_status_t ie4p_decompress_lz4_raw(
     const uint8_t *src,
     size_t src_len,
     uint8_t *dst,
@@ -252,16 +282,21 @@ static ie4p_status_t decompress_lz4_raw(
     return (dp == dst_len) ? IE4P_OK : IE4P_ERR_LZ4;
 }
 
-static ie4p_status_t load_installed_arc0_slots(
-    FILE *installed_arc0,
+ie4p_status_t ie4p_load_arc0_slots(
+    const ie4p_reader_t *installed_arc0,
     uint32_t *out_data_offset,
-    arc0_slot_t **out_slots,
+    ie4p_arc0_slot_t **out_slots,
     uint32_t *out_slot_count,
     char *err_detail,
     size_t err_cap)
 {
+    if (installed_arc0 == NULL || installed_arc0->read_at == NULL) {
+        set_err(err_detail, err_cap, "Lector de ie_a.fa invalido.");
+        return IE4P_ERR_ARGS;
+    }
+
     uint8_t hdr[72];
-    if (fseek(installed_arc0, 0L, SEEK_SET) != 0 || read_exact(installed_arc0, hdr, sizeof(hdr)) != 0) {
+    if (installed_arc0->read_at(installed_arc0->ctx, 0ULL, hdr, sizeof(hdr)) != 0) {
         set_err(err_detail, err_cap, "No se pudo leer la cabecera de ie_a.fa instalado.");
         return IE4P_ERR_IO_READ;
     }
@@ -289,8 +324,7 @@ static ie4p_status_t load_installed_arc0_slots(
         return IE4P_ERR_OOM;
     }
 
-    if (fseek(installed_arc0, (long)file_entries_off, SEEK_SET) != 0 ||
-        read_exact(installed_arc0, comp_buf, comp_len) != 0) {
+    if (installed_arc0->read_at(installed_arc0->ctx, (uint64_t)file_entries_off, comp_buf, comp_len) != 0) {
         free(comp_buf);
         set_err(err_detail, err_cap, "Error leyendo tabla FileEntries del juego instalado.");
         return IE4P_ERR_IO_READ;
@@ -311,7 +345,7 @@ static ie4p_status_t load_installed_arc0_slots(
         return IE4P_ERR_BAD_ARC0;
     }
 
-    arc0_slot_t *slots = (arc0_slot_t *)malloc((size_t)file_entries_cnt * sizeof(arc0_slot_t));
+    ie4p_arc0_slot_t *slots = (ie4p_arc0_slot_t *)malloc((size_t)file_entries_cnt * sizeof(ie4p_arc0_slot_t));
     if (slots == NULL) {
         free(raw_buf);
         set_err(err_detail, err_cap, "Memoria insuficiente para indice de archivos.");
@@ -346,8 +380,8 @@ static int ensure_capacity(uint8_t **buf, size_t *cap, size_t needed)
     return 0;
 }
 
-ie4p_status_t ie4p_apply_patch_streams(
-    FILE *installed_arc0,
+ie4p_status_t ie4p_apply_patch_reader(
+    const ie4p_reader_t *installed_arc0,
     FILE *patch_pack,
     FILE *out_arc0,
     ie4p_progress_fn progress_cb,
@@ -355,18 +389,18 @@ ie4p_status_t ie4p_apply_patch_streams(
     char *err_detail,
     size_t err_detail_cap)
 {
-    if (installed_arc0 == NULL || patch_pack == NULL || out_arc0 == NULL) {
+    if (installed_arc0 == NULL || installed_arc0->read_at == NULL || patch_pack == NULL || out_arc0 == NULL) {
         set_err(err_detail, err_detail_cap, "Punteros de archivo nulos.");
         return IE4P_ERR_ARGS;
     }
 
-    init_crc32_table();
+    ie4p_crc32_init();
 
     uint32_t installed_data_off = 0U;
-    arc0_slot_t *slots = NULL;
+    ie4p_arc0_slot_t *slots = NULL;
     uint32_t slot_count = 0U;
 
-    ie4p_status_t st = load_installed_arc0_slots(
+    ie4p_status_t st = ie4p_load_arc0_slots(
         installed_arc0, &installed_data_off, &slots, &slot_count, err_detail, err_detail_cap);
     if (st != IE4P_OK) {
         return st;
@@ -430,7 +464,7 @@ ie4p_status_t ie4p_apply_patch_streams(
 
     const uint8_t *prefix_ptr = NULL;
     if (prefix_codec == IE4P_OP_EMBEDDED_LZ4) {
-        st = decompress_lz4_raw(comp_buf, prefix_stored_len, decomp_buf, prefix_raw_len);
+        st = ie4p_decompress_lz4_raw(comp_buf, prefix_stored_len, decomp_buf, prefix_raw_len);
         if (st != IE4P_OK) {
             set_err(err_detail, err_detail_cap, "Error LZ4 en cabecera ARC0 del parche.");
             goto cleanup;
@@ -444,7 +478,7 @@ ie4p_status_t ie4p_apply_patch_streams(
         goto cleanup;
     }
 
-    uint32_t actual_prefix_crc = crc32_update(0xFFFFFFFFU, prefix_ptr, prefix_raw_len) ^ 0xFFFFFFFFU;
+    uint32_t actual_prefix_crc = ie4p_crc32_update(0xFFFFFFFFU, prefix_ptr, prefix_raw_len) ^ 0xFFFFFFFFU;
     if (actual_prefix_crc != prefix_crc32) {
         st = IE4P_ERR_CRC;
         set_err(err_detail, err_detail_cap, "CRC32 invalido en cabecera ARC0 del parche.");
@@ -491,39 +525,40 @@ ie4p_status_t ie4p_apply_patch_streams(
 
         uint32_t crc_state = 0xFFFFFFFFU;
 
-        if (op_type == IE4P_OP_COPY_INSTALLED) {
-            const arc0_slot_t *slot = &slots[file_idx];
+        if (op_type == IE4P_OP_COPY_INSTALLED || op_type == IE4P_OP_COPY_SLOT) {
+            uint32_t donor_idx = (op_type == IE4P_OP_COPY_SLOT) ? stored_len : file_idx;
+            if (donor_idx >= slot_count) {
+                st = IE4P_ERR_BAD_PACK;
+                set_err(err_detail, err_detail_cap, "Slot donante fuera de rango en parche IE4P.");
+                goto cleanup;
+            }
+            const ie4p_arc0_slot_t *slot = &slots[donor_idx];
             if (slot->file_size != raw_len) {
                 st = IE4P_ERR_SIZE_MISMATCH;
                 if (err_detail != NULL && err_detail_cap > 0) {
                     snprintf(err_detail, err_detail_cap,
                         "Tamano distinto en archivo base #%u (%u != %u).",
-                        (unsigned)file_idx, (unsigned)slot->file_size, (unsigned)raw_len);
+                        (unsigned)donor_idx, (unsigned)slot->file_size, (unsigned)raw_len);
                 }
                 goto cleanup;
             }
 
             uint64_t abs_off = (uint64_t)installed_data_off + (uint64_t)slot->file_offset_in_data;
-            if (abs_off > 0x7FFFFFFFULL || fseek(installed_arc0, (long)abs_off, SEEK_SET) != 0) {
-                st = IE4P_ERR_IO_READ;
-                set_err(err_detail, err_detail_cap, "Error de posicionamiento en ie_a.fa instalado.");
-                goto cleanup;
-            }
-
             uint32_t rem = raw_len;
             while (rem > 0U) {
                 size_t chunk = rem > STREAM_CHUNK_SIZE ? STREAM_CHUNK_SIZE : (size_t)rem;
-                if (read_exact(installed_arc0, io_buf, chunk) != 0) {
+                if (installed_arc0->read_at(installed_arc0->ctx, abs_off, io_buf, chunk) != 0) {
                     st = IE4P_ERR_IO_READ;
                     set_err(err_detail, err_detail_cap, "Error leyendo datos del juego instalado.");
                     goto cleanup;
                 }
-                crc_state = crc32_update(crc_state, io_buf, chunk);
+                crc_state = ie4p_crc32_update(crc_state, io_buf, chunk);
                 if (write_exact(out_arc0, io_buf, chunk) != 0) {
                     st = IE4P_ERR_IO_WRITE;
                     set_err(err_detail, err_detail_cap, "Error escribiendo en SD (revisa espacio libre ~900 MB).");
                     goto cleanup;
                 }
+                abs_off += (uint64_t)chunk;
                 rem -= (uint32_t)chunk;
             }
         } else if (op_type == IE4P_OP_EMBEDDED_RAW) {
@@ -541,7 +576,7 @@ ie4p_status_t ie4p_apply_patch_streams(
                     set_err(err_detail, err_detail_cap, "Error leyendo bloque RAW del parche.");
                     goto cleanup;
                 }
-                crc_state = crc32_update(crc_state, io_buf, chunk);
+                crc_state = ie4p_crc32_update(crc_state, io_buf, chunk);
                 if (write_exact(out_arc0, io_buf, chunk) != 0) {
                     st = IE4P_ERR_IO_WRITE;
                     set_err(err_detail, err_detail_cap, "Error escribiendo en SD (revisa espacio libre ~900 MB).");
@@ -563,13 +598,13 @@ ie4p_status_t ie4p_apply_patch_streams(
                 goto cleanup;
             }
 
-            st = decompress_lz4_raw(comp_buf, stored_len, decomp_buf, raw_len);
+            st = ie4p_decompress_lz4_raw(comp_buf, stored_len, decomp_buf, raw_len);
             if (st != IE4P_OK) {
                 set_err(err_detail, err_detail_cap, "Datos corruptos en bloque LZ4 del parche.");
                 goto cleanup;
             }
 
-            crc_state = crc32_update(crc_state, decomp_buf, raw_len);
+            crc_state = ie4p_crc32_update(crc_state, decomp_buf, raw_len);
             if (write_exact(out_arc0, decomp_buf, raw_len) != 0) {
                 st = IE4P_ERR_IO_WRITE;
                 set_err(err_detail, err_detail_cap, "Error escribiendo bloque actualizado en SD.");
@@ -630,6 +665,25 @@ cleanup:
     free(io_buf);
     free(slots);
     return st;
+}
+
+ie4p_status_t ie4p_apply_patch_streams(
+    FILE *installed_arc0,
+    FILE *patch_pack,
+    FILE *out_arc0,
+    ie4p_progress_fn progress_cb,
+    void *user_data,
+    char *err_detail,
+    size_t err_detail_cap)
+{
+    if (installed_arc0 == NULL) {
+        set_err(err_detail, err_detail_cap, "Archivo ie_a.fa nulo.");
+        return IE4P_ERR_ARGS;
+    }
+    ie4p_reader_t reader;
+    ie4p_init_file_reader(&reader, installed_arc0, 0ULL);
+    return ie4p_apply_patch_reader(
+        &reader, patch_pack, out_arc0, progress_cb, user_data, err_detail, err_detail_cap);
 }
 
 const char *ie4p_status_str(ie4p_status_t st)

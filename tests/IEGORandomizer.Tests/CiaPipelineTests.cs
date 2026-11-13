@@ -1347,13 +1347,14 @@ namespace IEGORandomizer.Tests
                 string repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
                 string hostVerifyC = Path.Combine(repoRoot, "src", "IEGORandomizer.Updater2DS", "host_verify.c");
                 string coreC = Path.Combine(repoRoot, "src", "IEGORandomizer.Updater2DS", "source", "ie4p_core.c");
-                if (File.Exists(hostVerifyC) && File.Exists(coreC) && File.Exists("/usr/bin/gcc"))
+                string seedC = Path.Combine(repoRoot, "src", "IEGORandomizer.Updater2DS", "source", "ie4p_seed.c");
+                if (File.Exists(hostVerifyC) && File.Exists(coreC) && File.Exists(seedC) && File.Exists("/usr/bin/gcc"))
                 {
                     string cBin = Path.Combine(tempDir, "ie4p_host_verify");
                     var gccProc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                     {
                         FileName = "/usr/bin/gcc",
-                        ArgumentList = { "-std=c99", "-O2", "-Wall", "-Wextra", "-Werror", hostVerifyC, coreC, "-o", cBin },
+                        ArgumentList = { "-std=c99", "-O2", "-Wall", "-Wextra", "-Werror", hostVerifyC, coreC, seedC, "-o", cBin },
                         RedirectStandardError = true,
                         UseShellExecute = false
                     });
@@ -1453,6 +1454,143 @@ namespace IEGORandomizer.Tests
                 Assert.Equal(
                     CiaFormatInspector.ComputeStreamingFileSha256Hex(repairedFa),
                     CiaFormatInspector.ComputeStreamingFileSha256Hex(reconPath));
+            }
+            finally
+            {
+                TryCleanup(tempDir);
+            }
+        }
+
+        [Fact]
+        public void OnConsoleSeedRecipe_And_C99Engine_GenerateValidPlayableArc0AcrossManualAndRandomSeeds()
+        {
+            string tempDir = CreateTempTestDir("onconsole_seed_ie4r");
+            try
+            {
+                string sourceCia = Path.Combine(tempDir, "Luz_Clean.cia");
+                BuildSyntheticLuzV000MultiContentCia(sourceCia, out var origAssets);
+                string cleanFa = Path.Combine(tempDir, "clean_ie_a.fa");
+                File.WriteAllBytes(cleanFa, origAssets["ie_a.fa"]);
+
+                // Build an installed randomized ie_a.fa (representing _Randomizado.cia on the user's 2DS)
+                string randDir = Path.Combine(tempDir, "inst_rand");
+                Assert.Equal(0, CliRunner.Run(new[] { "--cli", "--input", cleanFa, "--output", randDir, "--preset", "full", "--seed", "INSTALLED-V122" }));
+                string installedRandFa = Directory.GetFiles(randDir, "ie_a.fa", SearchOption.AllDirectories)[0];
+
+                // Build the IE4RV100 on-console seed recipe via CLI
+                string recipePath = Path.Combine(tempDir, "seed_recipe.ie4r");
+                Assert.Equal(0, CliRunner.Run(new[]
+                {
+                    "--cli",
+                    "--input", installedRandFa,
+                    "--clean-reference", cleanFa,
+                    "--build-2ds-seed-recipe", recipePath
+                }));
+                Assert.True(File.Exists(recipePath));
+                Assert.True(new FileInfo(recipePath).Length > 128);
+
+                // Compile the actual ARM11/Host C99 engine (ie4p_core.c + ie4p_seed.c + host_verify.c)
+                string repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+                string hostVerifyBin = Path.Combine(tempDir, "host_verify_ie4r");
+                var gccInfo = new System.Diagnostics.ProcessStartInfo("gcc")
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false
+                };
+                gccInfo.ArgumentList.Add("-std=c99");
+                gccInfo.ArgumentList.Add("-O2");
+                gccInfo.ArgumentList.Add("-Wall");
+                gccInfo.ArgumentList.Add("-Wextra");
+                gccInfo.ArgumentList.Add("-Werror");
+                gccInfo.ArgumentList.Add(Path.Combine(repoRoot, "src", "IEGORandomizer.Updater2DS", "host_verify.c"));
+                gccInfo.ArgumentList.Add(Path.Combine(repoRoot, "src", "IEGORandomizer.Updater2DS", "source", "ie4p_core.c"));
+                gccInfo.ArgumentList.Add(Path.Combine(repoRoot, "src", "IEGORandomizer.Updater2DS", "source", "ie4p_seed.c"));
+                gccInfo.ArgumentList.Add("-o");
+                gccInfo.ArgumentList.Add(hostVerifyBin);
+
+                using (var gccProc = System.Diagnostics.Process.Start(gccInfo)!)
+                {
+                    string gccErr = gccProc.StandardError.ReadToEnd();
+                    gccProc.WaitForExit();
+                    Assert.True(gccProc.ExitCode == 0, $"gcc failed: {gccErr}");
+                }
+
+                string RunC99Seed(string seedStr, string outName)
+                {
+                    string outFa = Path.Combine(tempDir, outName);
+                    var runInfo = new System.Diagnostics.ProcessStartInfo(hostVerifyBin)
+                    {
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false
+                    };
+                    runInfo.ArgumentList.Add("--seed");
+                    runInfo.ArgumentList.Add(installedRandFa);
+                    runInfo.ArgumentList.Add(recipePath);
+                    runInfo.ArgumentList.Add(seedStr);
+                    runInfo.ArgumentList.Add(outFa);
+                    using var p = System.Diagnostics.Process.Start(runInfo)!;
+                    string stderr = p.StandardError.ReadToEnd();
+                    p.WaitForExit();
+                    Assert.True(p.ExitCode == 0, $"host_verify --seed failed: {stderr}");
+                    return outFa;
+                }
+
+                string seed1RunA = RunC99Seed("DAVID-2026", "seed1_a.fa");
+                string seed1RunB = RunC99Seed("  david-2026 ", "seed1_b.fa"); // case/whitespace canonicalized!
+                string seed2Run  = RunC99Seed("OTRA-PARTIDA-777", "seed2.fa");
+
+                string sha1A = CiaFormatInspector.ComputeStreamingFileSha256Hex(seed1RunA);
+                string sha1B = CiaFormatInspector.ComputeStreamingFileSha256Hex(seed1RunB);
+                string sha2  = CiaFormatInspector.ComputeStreamingFileSha256Hex(seed2Run);
+
+                Assert.Equal(sha1A, sha1B);
+                Assert.NotEqual(sha1A, sha2);
+
+                // Cold-open BOTH C99-generated archives in SafeGOGame and verify integrity + rig preservation + real randomization!
+                using var cleanCheck = new Lynx.Core.Games.SafeGOGame(cleanFa, "es");
+                var cleanBases = cleanCheck.GetCharabase();
+                var cleanCp10 = System.Linq.Enumerable.FirstOrDefault(cleanBases, b => b.ModelNumber == 10);
+
+                Lynx.InazumaEleven.Logic.ICharaparam[] prms1 = null!;
+                Lynx.InazumaEleven.Logic.ICharaparam[] prms2 = null!;
+
+                foreach (string genPath in new[] { seed1RunA, seed2Run })
+                {
+                    using var genGame = new Lynx.Core.Games.SafeGOGame(genPath, "es");
+                    var bases = genGame.GetCharabase();
+                    var prms = genGame.GetCharaparams();
+                    var teams = genGame.GetStoryTeamsOnly();
+                    Assert.True(bases.Length == cleanBases.Length);
+                    Assert.True(prms.Length > 0);
+                    Assert.True(teams.Length > 0);
+
+                    if (genPath == seed1RunA) prms1 = prms;
+                    else prms2 = prms;
+
+                    // Every character's (Body, Gender) rig must match its clean retail slot (preventing btl0002 kit 903 crash!)
+                    for (int b = 0; b < bases.Length; b++)
+                    {
+                        Assert.Equal(cleanBases[b].Body, bases[b].Body);
+                        Assert.Equal(cleanBases[b].Gender, bases[b].Gender);
+                    }
+
+                    if (cleanCp10 != null)
+                    {
+                        var cp10 = System.Linq.Enumerable.First(bases, b => b.ModelNumber == 10);
+                        Assert.Equal(cleanCp10.Body, cp10.Body);
+                        Assert.Equal(cleanCp10.Gender, cp10.Gender);
+                    }
+
+                    // Visual identity swaps must have actually changed NameHash on swappable characters!
+                    Assert.True(bases.Zip(cleanBases).Any(pair => pair.First.NameHash != pair.Second.NameHash),
+                        "On-console seed must swap character visual identities.");
+                }
+
+                // Different seeds must produce different player stats/elements!
+                Assert.True(prms1.Zip(prms2).Any(pair => pair.First.Kick != pair.Second.Kick || pair.First.Element != pair.Second.Element),
+                    "Different seeds on console must generate distinct stats and elements.");
             }
             finally
             {
