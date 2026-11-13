@@ -6,6 +6,7 @@ on:
       - '.github/workflows/verify-2ds-development.yml'
       - 'src/IEGORandomizer.Engine/OnConsole/**'
       - 'src/IEGORandomizer.Updater2DS/source/**'
+      - 'src/IEGORandomizer.Updater2DS/host_verify.c'
       - 'tests/IEGORandomizer.Tests/**'
   workflow_dispatch:
 permissions:

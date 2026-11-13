@@ -1654,6 +1654,31 @@ namespace IEGORandomizer.Tests
                     File.Delete(path);
                 }
                 Assert.True(sawFullyRandomStat, "Stats must not be restricted to 70–130% of their original values.");
+
+                // Reject 20 different truncated recipe headers without accepting or
+                // reconstructing an archive from incomplete input.
+                byte[] validRecipe = File.ReadAllBytes(recipePath);
+                for (int length = 0; length < 20; length++)
+                {
+                    string truncated = Path.Combine(tempDir, $"bad_recipe_{length}.ie4r");
+                    File.WriteAllBytes(truncated, validRecipe.Take(length).ToArray());
+                    var procInfo = new System.Diagnostics.ProcessStartInfo(hostVerifyBin)
+                    {
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false
+                    };
+                    procInfo.ArgumentList.Add("--seed");
+                    procInfo.ArgumentList.Add(installedRandFa);
+                    procInfo.ArgumentList.Add(truncated);
+                    procInfo.ArgumentList.Add("BAD-RECIPE");
+                    procInfo.ArgumentList.Add(Path.Combine(tempDir, $"bad_output_{length}.fa"));
+                    using var proc = System.Diagnostics.Process.Start(procInfo)!;
+                    proc.StandardOutput.ReadToEnd();
+                    proc.StandardError.ReadToEnd();
+                    proc.WaitForExit();
+                    Assert.NotEqual(0, proc.ExitCode, $"Truncated recipe length {length} must fail.");
+                }
             }
             finally
             {

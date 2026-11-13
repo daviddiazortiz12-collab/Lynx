@@ -389,6 +389,30 @@ static int run_pxi_self_test(void)
         fclose(tmp);
         return 1;
     }
+    /* Boundary cases are deliberately separate from the sequential read above:
+     * first/last bytes, both sides of DMA and 128 KiB cache boundaries, empty
+     * reads, and requests extending beyond the archive must be handled safely. */
+    static const struct { uint64_t off; size_t len; int valid; } cases[] = {
+        {0U,1U,1}, {0U,4U,1}, {1U,1U,1}, {4095U,1U,1}, {4095U,2U,1},
+        {4096U,1U,1}, {4096U,4096U,1}, {8191U,2U,1}, {65535U,1U,1},
+        {65535U,3U,1}, {131071U,1U,1}, {131071U,2U,1}, {131072U,1U,1},
+        {149998U,2U,1}, {149999U,1U,1}, {150000U,0U,1},
+        {149999U,2U,0}, {150000U,1U,0}, {150001U,0U,0}, {UINT64_MAX,1U,0}
+    };
+    uint8_t slice[4096];
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        int read_st = reader.read_at(reader.ctx, cases[i].off, slice, cases[i].len);
+        if ((read_st == 0) != cases[i].valid ||
+            (cases[i].valid && cases[i].len > 0 && memcmp(slice, fa + cases[i].off, cases[i].len) != 0)) {
+            fprintf(stderr, "Self-test boundary %zu failed (offset=%llu size=%zu status=%d)\n",
+                    i, (unsigned long long)cases[i].off, cases[i].len, read_st);
+            pxi_game_close(&g);
+            free(check);
+            free(img);
+            fclose(tmp);
+            return 1;
+        }
+    }
     pxi_game_close(&g);
     free(check);
 
