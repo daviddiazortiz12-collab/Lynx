@@ -113,6 +113,18 @@ namespace IEGORandomizer.App
                     case "--dedup-es":
                         options.Cia.DeduplicateOtherLanguageStreamsToSpanish = true;
                         break;
+                    case "--export-2ds-delta-pack":
+                        if (i + 1 < args.Length)
+                        {
+                            options.Export.Export2dsDeltaPatchPackPath = args[++i];
+                            options.Export.ExportStandaloneIeAFa = true;
+                            options.Export.ExportCitraModStructure = false;
+                            options.Export.ExportLuma3dsLayeredFsStructure = false;
+                        }
+                        break;
+                    case "--delta-over-vanilla":
+                        options.Export.AssumePriorRandomizedInstallForDeltaPack = false;
+                        break;
                     case "--preset":
                         if (i + 1 < args.Length)
                         {

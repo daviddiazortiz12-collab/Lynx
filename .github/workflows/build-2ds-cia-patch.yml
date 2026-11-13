@@ -1,4 +1,4 @@
-name: Build & Publish Direct 2DS Installable Update .CIA
+name: Build & Publish Lightweight 2DS Update Patch .CIA
 
 on:
   push:
@@ -12,15 +12,10 @@ permissions:
   contents: write
 
 jobs:
-  build-2ds-cia:
+  build-lightweight-2ds-cia:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
-      - name: Free Runner Disk Space (50+ GB SSD for 3DS .CIA Streaming)
-        run: |
-          sudo rm -rf /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
-          df -h
-
       - name: Checkout branch arena/799dcf14-lynx
         uses: actions/checkout@v4
         with:
@@ -36,92 +31,134 @@ jobs:
         run: |
           dotnet nuget add source https://api.nuget.org/v3/index.json --name nuget.org --configfile NuGet.Config
 
-      - name: Run Full 35-Test Hardware & Integrity Suite
+      - name: Build & Run Full 36-Test Hardware + IE4P C99 Engine Suite
         run: |
           dotnet build IEGORandomizer.sln --configuration Release
           dotnet run --project tests/IEGORandomizer.Tests/IEGORandomizer.Tests.csproj --configuration Release --no-build
 
-      - name: Download Base .CIA & Build Cold-Verified Nintendo 2DS Update .CIA (V.1.2.3)
+      - name: Generate Verified IE4P Delta Pack & Compile ARM11 2DS Updater .CIA
         run: |
           if [ ! -f .cia-build-request.json ]; then
             echo "No .cia-build-request.json found; skipping."
             exit 0
           fi
-          GDRIVE_CIA_ID=$(jq -r '.gdriveCiaId // empty' .cia-build-request.json)
+
+          GDRIVE_ID=$(jq -r '.gdriveSourceId // .gdriveCiaId // empty' .cia-build-request.json)
           INPUT_PRESET=$(jq -r '.preset // "full"' .cia-build-request.json)
           INPUT_SEED=$(jq -r '.seed // empty' .cia-build-request.json)
-          REL_TAG=$(jq -r '.releaseTag // "v1.2.3-2ds-patch"' .cia-build-request.json)
+          OVER_VANILLA=$(jq -r '.overVanillaOnly // "false"' .cia-build-request.json)
 
-          if [ -z "$GDRIVE_CIA_ID" ]; then
-            echo "ERROR: gdriveCiaId missing in .cia-build-request.json"
+          if [ -z "$GDRIVE_ID" ]; then
+            echo "ERROR: gdriveSourceId missing in .cia-build-request.json"
             exit 1
           fi
-          echo "::add-mask::${GDRIVE_CIA_ID}"
+          echo "::add-mask::${GDRIVE_ID}"
 
-          python3 -m pip install --quiet --upgrade gdown
-          mkdir -p /tmp/cia_work /tmp/cia_out
-          python3 -m gdown --fuzzy "https://drive.google.com/uc?id=${GDRIVE_CIA_ID}" -O /tmp/cia_work/source_base.cia
-          ls -lh /tmp/cia_work/source_base.cia
+          python3 -m pip install --quiet --upgrade gdown qrcode pillow
+          mkdir -p /tmp/cia_work /tmp/cia_out src/IEGORandomizer.Updater2DS/romfs
 
-          OUT_CIA="/tmp/cia_out/InazumaElevenGO_Luz_ParcheActualizacion_v1.2.3_2DS.cia"
-          SEED_ARGS=()
-          if [ -n "$INPUT_SEED" ]; then
-            SEED_ARGS=(--seed "$INPUT_SEED")
+          python3 -m gdown --fuzzy "https://drive.google.com/uc?id=${GDRIVE_ID}" -O /tmp/cia_work/raw_download.bin
+          ls -lh /tmp/cia_work/raw_download.bin
+
+          MAGIC_HEX=$(head -c 4 /tmp/cia_work/raw_download.bin | xxd -p)
+          if [ "$MAGIC_HEX" = "41524330" ]; then
+            SRC_INPUT="/tmp/cia_work/ie_a.fa"
+            mv /tmp/cia_work/raw_download.bin "$SRC_INPUT"
+            echo "Detected standalone Level-5 ARC0 archive (ie_a.fa)."
+          else
+            SRC_INPUT="/tmp/cia_work/source_base.cia"
+            mv /tmp/cia_work/raw_download.bin "$SRC_INPUT"
+            echo "Detected Nintendo 3DS .CIA container."
           fi
 
+          EXTRA_ARGS=()
+          if [ -n "$INPUT_SEED" ]; then
+            EXTRA_ARGS+=(--seed "$INPUT_SEED")
+          fi
+          if [ "$OVER_VANILLA" = "true" ]; then
+            EXTRA_ARGS+=(--delta-over-vanilla)
+          fi
+
+          PACK_FILE="$PWD/src/IEGORandomizer.Updater2DS/romfs/patch_v123.ie4p"
           dotnet run --project src/IEGORandomizer.App/IEGORandomizer.App.csproj --configuration Release --no-build -- \
             --cli \
-            --input /tmp/cia_work/source_base.cia \
-            --output-cia "$OUT_CIA" \
+            --input "$SRC_INPUT" \
+            --output /tmp/cia_work/patched_out \
             --preset "$INPUT_PRESET" \
-            "${SEED_ARGS[@]}" \
-            --dedup-es \
-            --fbi-update
+            "${EXTRA_ARGS[@]}" \
+            --export-2ds-delta-pack "$PACK_FILE"
 
-          rm -f /tmp/cia_work/source_base.cia
-          ls -lh "$OUT_CIA"
-          SIZE_BYTES=$(stat -c%s "$OUT_CIA")
-          echo "Generated .CIA size: ${SIZE_BYTES} bytes"
-          if [ "$SIZE_BYTES" -ge 2147483648 ]; then
-            echo "ERROR: .CIA exceeds GitHub Releases 2 GiB single-asset limit (${SIZE_BYTES} bytes)."
-            exit 1
+          ls -lh "$PACK_FILE"
+
+          # Cold-verify C99 streaming engine against target patched ie_a.fa if input was ie_a.fa
+          TARGET_FA=$(find /tmp/cia_work/patched_out -name "ie_a.fa" | head -n 1)
+          if [ -f "/tmp/cia_work/ie_a.fa" ] && [ -n "$TARGET_FA" ]; then
+            gcc -std=c99 -O2 -Wall -Wextra -Werror src/IEGORandomizer.Updater2DS/host_verify.c src/IEGORandomizer.Updater2DS/source/ie4p_core.c -o /tmp/ie4p_host_verify
+            /tmp/ie4p_host_verify /tmp/cia_work/ie_a.fa "$PACK_FILE" /tmp/cia_work/reconstructed_check.fa
+            ORIG_TARGET_SHA=$(sha256sum "$TARGET_FA" | awk '{print $1}')
+            RECON_SHA=$(sha256sum /tmp/cia_work/reconstructed_check.fa | awk '{print $1}')
+            echo "Target SHA-256       : $ORIG_TARGET_SHA"
+            echo "Reconstructed SHA-256: $RECON_SHA"
+            test "$ORIG_TARGET_SHA" = "$RECON_SHA"
+            rm -f /tmp/cia_work/reconstructed_check.fa
           fi
-          (cd /tmp/cia_out && sha256sum "InazumaElevenGO_Luz_ParcheActualizacion_v1.2.3_2DS.cia" > SHA256SUMS.txt)
+          rm -rf /tmp/cia_work
+
+          # 1) Compile ARM11 2DS ELF + SMDH icon inside official devkitpro/devkitarm container
+          docker run --rm -v "$PWD/src/IEGORandomizer.Updater2DS:/work" -w /work devkitpro/devkitarm:latest \
+            bash -lc "make clean && make -j4 && ls -lh updater_2ds.elf updater_2ds.smdh"
+
+          # 2) Build CTR makerom and package standalone installable 2DS .CIA
+          git clone --depth 1 https://github.com/3DSGuy/Project_CTR.git /tmp/makerom_src
+          make -C /tmp/makerom_src/makerom deps -j4
+          make -C /tmp/makerom_src/makerom -j4
+
+          OUT_CIA="/tmp/cia_out/InazumaElevenGO_Luz_ParcheLigero_v1.2.3_2DS.cia"
+          (
+            cd src/IEGORandomizer.Updater2DS
+            /tmp/makerom_src/makerom/bin/makerom \
+              -f cia \
+              -o "$OUT_CIA" \
+              -rsf app.rsf \
+              -elf updater_2ds.elf \
+              -icon updater_2ds.smdh \
+              -ver 1059
+          )
+
+          ls -lh "$OUT_CIA"
+          # Cold-inspect the generated .CIA using our own 3DS CIA inspector
+          dotnet run --project src/IEGORandomizer.App/IEGORandomizer.App.csproj --configuration Release --no-build -- \
+            --inspect-cia "$OUT_CIA"
+
+          (cd /tmp/cia_out && sha256sum "InazumaElevenGO_Luz_ParcheLigero_v1.2.3_2DS.cia" > SHA256SUMS.txt)
           cat /tmp/cia_out/SHA256SUMS.txt
 
-      - name: Upload Installable .CIA Directly to GitHub Releases
+      - name: Upload Lightweight 2DS .CIA + FBI QR Code to GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO_SLUG: ${{ github.repository }}
         run: |
+          if [ ! -f /tmp/cia_out/InazumaElevenGO_Luz_ParcheLigero_v1.2.3_2DS.cia ]; then
+            echo "Nothing to upload."
+            exit 0
+          fi
           REL_TAG=$(jq -r '.releaseTag // "v1.2.3-2ds-patch"' .cia-build-request.json)
-          OUT_CIA="/tmp/cia_out/InazumaElevenGO_Luz_ParcheActualizacion_v1.2.3_2DS.cia"
+          OUT_CIA="/tmp/cia_out/InazumaElevenGO_Luz_ParcheLigero_v1.2.3_2DS.cia"
+          CIA_NAME="InazumaElevenGO_Luz_ParcheLigero_v1.2.3_2DS.cia"
+          DIRECT_URL="https://github.com/${REPO_SLUG}/releases/download/${REL_TAG}/${CIA_NAME}"
+
+          python3 -c "import qrcode; qrcode.make('${DIRECT_URL}').save('/tmp/cia_out/QR_Instalar_En_FBI_2DS.png')"
+
+          SIZE_MB=$(du -m "$OUT_CIA" | awk '{print $1}')
           NOTES_FILE="/tmp/cia_out/RELEASE_NOTES.md"
-          cat << 'EOF' > "$NOTES_FILE"
-          ## Parche de Actualización Directo `.CIA` para Nintendo 2DS / 3DS — `V.1.2.3` (`0004000000112F00`)
-
-          Archivo **`.CIA` instalable directamente en tu Nintendo 2DS con FBI**:
-          - **`InazumaElevenGO_Luz_ParcheActualizacion_v1.2.3_2DS.cia`**
-
-          ### Instalación directa en tu Nintendo 2DS
-          1. Copia `InazumaElevenGO_Luz_ParcheActualizacion_v1.2.3_2DS.cia` a la tarjeta SD de tu 2DS (o usa *Remote Install -> Scan QR Code / URL* en FBI).
-          2. En **FBI**, selecciona el `.cia` -> **Install CIA**.
-          3. Al tener `TitleID = 0004000000112F00` y versión superior `V.1.2.3` (`1059 > 1058`), **FBI actualiza el juego directamente encima sin borrar tu partida guardada (`00000001.sav`)**.
-
-          ### Correcciones incluidas en este parche `.CIA`
-          - **Sin crasheo al avanzar tras la formación del Raimon contra Caballeros Templarios (`btl0002`)**:
-            - `ITEM_REF_BEGIN` preservado al 100% en `item_config.cfg.bin` (formaciones `ifa0001`, supertácticas `iis*`, escudos y entrenadores intactos).
-            - `system_text_*.cfg.bin` actualizado in-place respetando el esquema exacto de 3 columnas de IEGO1.
-            - Esqueleto `(Body, Gender)` preservado para que Victor Blade (`para_cp0010`) cargue sin fallo su uniforme especial `903` de Caballeros Templarios en `BtlSetting()`.
-          - **Mismo aspecto en cinemáticas, mapa y partidos**:
-            - Los actores de cinemáticas (`evcXXXX`) y jugadores `Type == 1` (`cpXXXX`, como Samguk) en `.npc.bin` mantienen su `HeadId` sincronizado con `chara_base`.
-          EOF
+          python3 src/IEGORandomizer.Updater2DS/write_release_notes.py "$NOTES_FILE" "$SIZE_MB" "$CIA_NAME"
 
           if gh release view "$REL_TAG" >/dev/null 2>&1; then
-            gh release upload "$REL_TAG" "$OUT_CIA" /tmp/cia_out/SHA256SUMS.txt --clobber
-            gh release edit "$REL_TAG" --title "Parche Actualización Directo .CIA 2DS (V.1.2.3)" --notes-file "$NOTES_FILE"
+            gh release upload "$REL_TAG" "$OUT_CIA" /tmp/cia_out/QR_Instalar_En_FBI_2DS.png /tmp/cia_out/SHA256SUMS.txt --clobber
+            gh release edit "$REL_TAG" --title "Parche Ligero Independiente .CIA para 2DS (v1.2.3)" --notes-file "$NOTES_FILE"
           else
-            gh release create "$REL_TAG" "$OUT_CIA" /tmp/cia_out/SHA256SUMS.txt \
+            gh release create "$REL_TAG" "$OUT_CIA" /tmp/cia_out/QR_Instalar_En_FBI_2DS.png /tmp/cia_out/SHA256SUMS.txt \
               --target arena/799dcf14-lynx \
-              --title "Parche Actualización Directo .CIA 2DS (V.1.2.3)" \
+              --title "Parche Ligero Independiente .CIA para 2DS (v1.2.3)" \
               --notes-file "$NOTES_FILE"
           fi

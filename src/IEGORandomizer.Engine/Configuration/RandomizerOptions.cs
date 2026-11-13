@@ -124,6 +124,8 @@ namespace IEGORandomizer.Engine.Configuration
         public bool ExportLuma3dsLayeredFsStructure { get; set; } = true;
         public string CustomTitleIdOverride { get; set; } = string.Empty;
         public string DirectCitraModsRootPath { get; set; } = string.Empty;
+        public string Export2dsDeltaPatchPackPath { get; set; } = string.Empty;
+        public bool AssumePriorRandomizedInstallForDeltaPack { get; set; } = true;
     }
 
     public sealed class CiaPackageOptions

@@ -19,5 +19,11 @@ output/
 *.cfa
 *.romfs
 *.fa
+*.ie4p
+*.elf
+*.smdh
+*.3dsx
+src/IEGORandomizer.Updater2DS/build/
+src/IEGORandomizer.Updater2DS/romfs/
 CLAUDE.md
 /tools

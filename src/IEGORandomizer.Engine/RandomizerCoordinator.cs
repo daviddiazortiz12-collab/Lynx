@@ -9,6 +9,7 @@ using IEGORandomizer.Engine.Seeding;
 using IEGORandomizer.Engine.Validation;
 using Lynx.Core.Games;
 using Lynx.Core.RomFs;
+using Lynx.Core.RomFs.Cia;
 using Lynx.Core.Scripts;
 
 namespace IEGORandomizer.Engine
@@ -218,6 +219,22 @@ namespace IEGORandomizer.Engine
                 $"(jugadores={report.PersistedDiffTelemetry.PersistedChangedCharaParamsCount}, técnicas={report.PersistedDiffTelemetry.PersistedChangedSkillTableEntriesCount}, " +
                 $"equipos={report.PersistedDiffTelemetry.PersistedChangedStoryTeamsCount + report.PersistedDiffTelemetry.PersistedChangedPachangaTeamsCount}, " +
                 $"equipaciones/params={report.PersistedDiffTelemetry.PersistedChangedTeamParamsCount}).");
+
+            if (!string.IsNullOrWhiteSpace(options.Export.Export2dsDeltaPatchPackPath))
+            {
+                ReportStep(progress, 98, "Generando paquete ligero independiente IE4P para actualizador .CIA de 2DS...");
+                var deltaRes = Arc0DeltaPatchPackBuilder.BuildPack(
+                    workspace.ActiveIeAFaPath,
+                    exportedFa,
+                    options.Export.Export2dsDeltaPatchPackPath,
+                    options.Export.AssumePriorRandomizedInstallForDeltaPack);
+
+                report.ExportedPaths.Add(deltaRes.OutputPackPath);
+                report.ValidationMessages.Add(
+                    $"[2DS-IE4P] Paquete delta ligero generado ({deltaRes.PackSizeBytes / (1024.0 * 1024.0):F2} MB): " +
+                    $"{deltaRes.ReusedInstalledFiles} archivos reutilizados del juego instalado en 2DS ({deltaRes.ReusedInstalledBytes / (1024.0 * 1024.0):F1} MB), " +
+                    $"{deltaRes.EmbeddedPatchFiles} archivos embebidos ({deltaRes.EmbeddedStoredBytes / (1024.0 * 1024.0):F2} MB comprimidos LZ4).");
+            }
 
             report.SourceImmutabilityVerified = workspace.VerifySourceUnchanged();
             if (!report.SourceImmutabilityVerified)

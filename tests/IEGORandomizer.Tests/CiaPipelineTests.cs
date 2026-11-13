@@ -1268,6 +1268,121 @@ namespace IEGORandomizer.Tests
             }
         }
 
+        [Fact]
+        public void Arc0DeltaPatchPack_ReconstructsBitForBitOverVanillaAndPriorV122Install()
+        {
+            string tempDir = CreateTempTestDir("arc0_ie4p_delta");
+            try
+            {
+                string sourceCia = Path.Combine(tempDir, "Luz_v000.cia");
+                BuildSyntheticLuzV000MultiContentCia(sourceCia, out var origAssets);
+
+                string vanillaIea = Path.Combine(tempDir, "vanilla_ie_a.fa");
+                File.WriteAllBytes(vanillaIea, origAssets["ie_a.fa"]);
+
+                // Append realistic untouched 3D assets (uniforms, stadiums, effects) to prove delta reuse
+                var arc = Arc0SafeArchive.OpenReadOnly(vanillaIea);
+                try
+                {
+                    byte[] stadiumBytes = new byte[128 * 1024];
+                    for (int i = 0; i < stadiumBytes.Length; i++) stadiumBytes[i] = (byte)((i * 31 + 7) & 0xFF);
+                    Arc0SafeArchive.WriteFileAtPath(arc.Directory, "/data/chr/model/waza/uniform/uni0001m1.xc", stadiumBytes);
+                    Arc0SafeArchive.WriteFileAtPath(arc.Directory, "/data/map/m001a1/m001a1.pck", stadiumBytes);
+                    string expandedVanilla = Path.Combine(tempDir, "vanilla_expanded_ie_a.fa");
+                    Arc0SafeArchive.SaveCopyTo(arc, expandedVanilla, vanillaIea);
+                    vanillaIea = expandedVanilla;
+                }
+                finally
+                {
+                    arc.Close();
+                }
+
+                // 1) Simulate an ALREADY-INSTALLED v1.2.2 "Todo Activado" game on the user's 2DS
+                string oldV122OutDir = Path.Combine(tempDir, "installed_v122_out");
+                int rcOld = CliRunner.Run(new[]
+                {
+                    "--cli",
+                    "--input", vanillaIea,
+                    "--output", oldV122OutDir,
+                    "--preset", "full",
+                    "--seed", "PRIOR-2DS-V122"
+                });
+                Assert.Equal(0, rcOld);
+                string installedV122Iea = Directory.GetFiles(oldV122OutDir, "ie_a.fa", SearchOption.AllDirectories)[0];
+                Assert.True(File.Exists(installedV122Iea));
+
+                // 2) Run v1.2.3 CLI with --export-2ds-delta-pack
+                string newV123OutDir = Path.Combine(tempDir, "target_v123_out");
+                string deltaPackPath = Path.Combine(tempDir, "patch_v123.ie4p");
+                int rcNew = CliRunner.Run(new[]
+                {
+                    "--cli",
+                    "--input", vanillaIea,
+                    "--output", newV123OutDir,
+                    "--preset", "full",
+                    "--seed", "PATCH-2DS-V123",
+                    "--export-2ds-delta-pack", deltaPackPath
+                });
+                Assert.Equal(0, rcNew);
+
+                string targetV123Iea = Directory.GetFiles(newV123OutDir, "ie_a.fa", SearchOption.AllDirectories)[0];
+                Assert.True(File.Exists(deltaPackPath));
+                string expectedSha = CiaFormatInspector.ComputeStreamingFileSha256Hex(targetV123Iea);
+
+                // Delta pack must be much smaller than full ie_a.fa because untouched stadium/uniform assets are reused
+                Assert.True(new FileInfo(deltaPackPath).Length < new FileInfo(targetV123Iea).Length - (200 * 1024),
+                    "Delta pack must exclude untouched 3D stadium/uniform assets and compress embedded files.");
+
+                // 3) Reconstruct over vanilla v0.0.0 ie_a.fa -> must match target v1.2.3 SHA-256 bit-for-bit!
+                string reconOverVanilla = Path.Combine(tempDir, "recon_over_vanilla.fa");
+                Arc0DeltaPatchPackBuilder.ApplyPackToStream(vanillaIea, deltaPackPath, reconOverVanilla);
+                Assert.Equal(expectedSha, CiaFormatInspector.ComputeStreamingFileSha256Hex(reconOverVanilla));
+
+                // 4) Reconstruct over ALREADY-RANDOMIZED v1.2.2 ie_a.fa -> must ALSO match target v1.2.3 SHA-256 bit-for-bit!
+                string reconOverV122 = Path.Combine(tempDir, "recon_over_v122.fa");
+                Arc0DeltaPatchPackBuilder.ApplyPackToStream(installedV122Iea, deltaPackPath, reconOverV122);
+                Assert.Equal(expectedSha, CiaFormatInspector.ComputeStreamingFileSha256Hex(reconOverV122));
+
+                // 5) Compile and run the exact portable ARM11 C99 engine (src/IEGORandomizer.Updater2DS/source/ie4p_core.c) if gcc is installed
+                string repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+                string hostVerifyC = Path.Combine(repoRoot, "src", "IEGORandomizer.Updater2DS", "host_verify.c");
+                string coreC = Path.Combine(repoRoot, "src", "IEGORandomizer.Updater2DS", "source", "ie4p_core.c");
+                if (File.Exists(hostVerifyC) && File.Exists(coreC) && File.Exists("/usr/bin/gcc"))
+                {
+                    string cBin = Path.Combine(tempDir, "ie4p_host_verify");
+                    var gccProc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "/usr/bin/gcc",
+                        ArgumentList = { "-std=c99", "-O2", "-Wall", "-Wextra", "-Werror", hostVerifyC, coreC, "-o", cBin },
+                        RedirectStandardError = true,
+                        UseShellExecute = false
+                    });
+                    gccProc!.WaitForExit();
+                    Assert.Equal(0, gccProc.ExitCode);
+
+                    foreach (string baseArchive in new[] { vanillaIea, installedV122Iea })
+                    {
+                        string cOut = Path.Combine(tempDir, "c_recon_" + Path.GetFileName(baseArchive));
+                        var runProc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = cBin,
+                            ArgumentList = { baseArchive, deltaPackPath, cOut },
+                            RedirectStandardError = true,
+                            RedirectStandardOutput = true,
+                            UseShellExecute = false
+                        });
+                        runProc!.WaitForExit();
+                        Assert.Equal(0, runProc.ExitCode);
+                        Assert.Equal(expectedSha, CiaFormatInspector.ComputeStreamingFileSha256Hex(cOut));
+                    }
+                }
+            }
+            finally
+            {
+                TryCleanup(tempDir);
+            }
+        }
+
         private static string CreateTempTestDir(string prefix)
         {
             string dir = Path.Combine(Path.GetTempPath(), $"iego_test_{prefix}_{Guid.NewGuid():N}");
