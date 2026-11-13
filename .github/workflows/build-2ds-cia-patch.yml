@@ -68,9 +68,9 @@ jobs:
           mkdir -p /tmp/cia_work /tmp/cia_out src/IEGORandomizer.Updater2DS/romfs
 
           echo "Downloading installed _Randomizado.cia from Google Drive..."
-          /tmp/py/bin/gdown --fuzzy "https://drive.google.com/uc?id=${INSTALLED_ID}" -O /tmp/cia_work/installed_randomizado.cia
+          /tmp/py/bin/gdown --retries 5 "${INSTALLED_ID}" -O /tmp/cia_work/installed_randomizado.cia
           echo "Downloading clean retail reference .cia from Google Drive..."
-          /tmp/py/bin/gdown --fuzzy "https://drive.google.com/uc?id=${CLEAN_REF_ID}" -O /tmp/cia_work/clean_retail.cia
+          /tmp/py/bin/gdown --retries 5 "${CLEAN_REF_ID}" -O /tmp/cia_work/clean_retail.cia
           ls -lh /tmp/cia_work/*.cia
 
           gcc -std=c99 -O2 -Wall -Wextra -Werror src/IEGORandomizer.Updater2DS/host_verify.c src/IEGORandomizer.Updater2DS/source/ie4p_core.c -o /tmp/ie4p_host_verify
