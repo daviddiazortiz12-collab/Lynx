@@ -1541,7 +1541,10 @@ namespace IEGORandomizer.Engine.OnConsole
             {
                 int cur = Level5CfgValueParser.TryReadHashOrId(variables[i], out int hv, out _) ? hv : 0;
                 origValues[i] = cur;
-                Level5CfgValueParser.UpdateHashOrIntVariableInPlace(variables[i], cur);
+                // Normalize even when a textual identifier hashes to the same value:
+                // sentinel writes require an integer payload, not a string-table entry.
+                variables[i].Type = CfgValueType.Int;
+                variables[i].Value = cur;
             }
 
             cleanNormalizedBytes = cfg.Save();
