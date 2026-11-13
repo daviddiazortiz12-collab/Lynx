@@ -24,4 +24,11 @@ jobs:
       - name: Build
         run: dotnet build IEGORandomizer.sln --configuration Release
       - name: Run synthetic integration and C engine tests
-        run: dotnet run --project tests/IEGORandomizer.Tests/IEGORandomizer.Tests.csproj --configuration Release --no-build
+        run: |
+          set +e
+          dotnet run --project tests/IEGORandomizer.Tests/IEGORandomizer.Tests.csproj --configuration Release --no-build 2>&1 | tee /tmp/test.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            grep -E '\[FAIL\]|ERROR|Exception' /tmp/test.log | head -20 | while IFS= read -r line; do echo "::error::$line"; done
+          fi
+          exit "$rc"
