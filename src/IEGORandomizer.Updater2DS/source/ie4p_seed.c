@@ -1066,49 +1066,14 @@ ie4p_status_t ie4p_apply_onconsole_seed_reader(
         }
     }
 
-    /* Randomize PalPack (Fichatron / ITEM_KIZUNAX) & prevent self-prerequisite cycles */
-    sm64_rng_t pal_rng;
-    rng_seed(&pal_rng, seed_text, "players.palpack");
-    uint32_t elig_kiz[2048];
-    uint32_t elig_cnt = 0U;
-    for (uint32_t k = 0U; k < palpack_cnt; k++) {
-        const uint8_t *kr = palpack_raw + ((size_t)k * 60U);
-        if (rd_u32(kr + 0U) != 0U && elig_cnt < 2048U) {
-            elig_kiz[elig_cnt++] = k;
-        }
-    }
-
-    if (elig_cnt >= 2U) {
-        build_derangement(perm_tmp, elig_cnt, &pal_rng);
-        for (uint32_t e = 0U; e < elig_cnt; e++) {
-            uint32_t k = elig_kiz[e];
-            uint32_t dk = elig_kiz[perm_tmp[e]];
-            const uint8_t *kr = palpack_raw + ((size_t)k * 60U);
-            const uint8_t *dkr = palpack_raw + ((size_t)dk * 60U);
-
-            int32_t new_rec = rd_i32(dkr + 4U);
-            uint32_t rec_off = rd_u32(kr + 8U);
-            if (patch_tpl_i32(tpls, tpl_cnt, item_tpl_idx, rec_off, new_rec) != 0) {
-                st = IE4P_ERR_BAD_PACK;
-                goto cleanup;
-            }
-
-            for (int p = 0; p < 4; p++) {
-                int32_t ptype = rd_i32(kr + 12U + ((size_t)p * 4U));
-                int32_t pid   = rd_i32(kr + 28U + ((size_t)p * 4U));
-                uint32_t poff = rd_u32(kr + 44U + ((size_t)p * 4U));
-                if (ptype == 2 && pid != 0) {
-                    int pi = find_player_by_param(players, player_cnt, pid);
-                    if (pi >= 0 && players[pi].mapped_param_hash != new_rec) {
-                        if (patch_tpl_i32(tpls, tpl_cnt, item_tpl_idx, poff, players[pi].mapped_param_hash) != 0) {
-                            st = IE4P_ERR_BAD_PACK;
-                            goto cleanup;
-                        }
-                    }
-                }
-            }
-        }
-    }
+    /* Keep the clean Fichatron cards and their prerequisites together. The old
+     * independent permutation changed RecrutedCharacterId without changing
+     * discovery flags or agent/encounter references, so a card could point at
+     * an unrelated character. The item template already contains the retail
+     * card data; do not rewrite its player and prerequisite fields here. */
+    (void)item_tpl_idx;
+    (void)palpack_raw;
+    (void)palpack_cnt;
 
     /* -------- PASS 4: Player Stats, Elements, Positions & Fighting Spirits -------- */
     sm64_rng_t pos_rng, elem_rng, stat_rng, av_rng;

@@ -14,6 +14,7 @@ using Lynx.Core.Binary;
 using Lynx.Core.Maps;
 using Lynx.Core.RomFs;
 using Lynx.Core.RomFs.Cia;
+using static Lynx.InazumaEleven.Games.GO.GOSupport;
 
 namespace IEGORandomizer.Tests
 {
@@ -1613,6 +1614,8 @@ namespace IEGORandomizer.Tests
                 var cleanChests = MapDataService.LoadAllTreasureChests(cleanCheck.IE_A.Directory)
                     .ToDictionary(c => (c.VirtualFilePath, c.NodeIndex));
                 Assert.True(cleanChests.Count > 0, "Synthetic fixture must contain map chests.");
+                var cleanCards = cleanCheck.GetItems("kizunax").OfType<ItemConfigPalpackCard>().ToArray();
+                Assert.True(cleanCards.Length > 0, "Synthetic fixture must have recruitment cards.");
                 var seedDigests = new HashSet<string>();
                 bool sawFullyRandomStat = false;
                 var cleanPlayers = cleanCheck.GetCharaparams().GroupBy(p => p.ParamHash).ToDictionary(g => g.Key, g => g.First());
@@ -1622,6 +1625,22 @@ namespace IEGORandomizer.Tests
                     Assert.True(seedDigests.Add(CiaFormatInspector.ComputeStreamingFileSha256Hex(path)),
                         $"Seed {trial} unexpectedly produced an identical archive.");
                     using var game = new Lynx.Core.Games.SafeGOGame(path, "es");
+                    var cards = game.GetItems("kizunax").OfType<ItemConfigPalpackCard>().ToArray();
+                    Assert.Equal(cleanCards.Length, cards.Length);
+                    foreach (var (original, generated) in cleanCards.Zip(cards))
+                    {
+                        Assert.Equal(original.ItemID, generated.ItemID);
+                        Assert.Equal(original.CharacterFlag, generated.CharacterFlag);
+                        Assert.Equal(original.RecrutedCharacterId, generated.RecrutedCharacterId);
+                        Assert.Equal(original.PrerequisitesType1, generated.PrerequisitesType1);
+                        Assert.Equal(original.PrerequisitesId1, generated.PrerequisitesId1);
+                        Assert.Equal(original.PrerequisitesType2, generated.PrerequisitesType2);
+                        Assert.Equal(original.PrerequisitesId2, generated.PrerequisitesId2);
+                        Assert.Equal(original.PrerequisitesType3, generated.PrerequisitesType3);
+                        Assert.Equal(original.PrerequisitesId3, generated.PrerequisitesId3);
+                        Assert.Equal(original.PrerequisitesType4, generated.PrerequisitesType4);
+                        Assert.Equal(original.PrerequisitesId4, generated.PrerequisitesId4);
+                    }
                     var chests = MapDataService.LoadAllTreasureChests(game.IE_A.Directory);
                     Assert.True(RouteDataService.TryReadRouteFile(cleanCheck.GetDirectory("soccer"), "scr_br01.cfg.bin", out var cleanRoute));
                     Assert.True(RouteDataService.TryReadRouteFile(game.GetDirectory("soccer"), "scr_br01.cfg.bin", out var newRoute));
