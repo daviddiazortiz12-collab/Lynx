@@ -526,6 +526,12 @@ namespace IEGORandomizer.Engine.OnConsole
                 var kizNodes = CollectChildNodes(itemCfg.Entries, "ITEM_KIZUNAX_BEGIN", "ITEM_KIZUNAX");
                 var palpackCards = Level5CfgBinAdapter.ReadEntries<ItemConfigPalpackCard>(itemCfg.Entries, "ITEM_KIZUNAX", "item_config.cfg.bin");
 
+                // Agent inventories and rewards may contain Fichatron cards. Never
+                // replace those IDs with ordinary items: that removes recruitment
+                // entries even when the card table itself remains intact.
+                foreach (var card in palpackCards)
+                    if (card.ItemID != 0) protection.ProtectedItemHashes.Add(card.ItemID);
+
                 var itemVars = new List<Variable>();
                 var kizRecruitVarMap = new Dictionary<int, int>();
                 var kizPrereqVarMap = new Dictionary<(int Row, int Slot), int>();

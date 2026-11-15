@@ -1000,7 +1000,7 @@ namespace IEGORandomizer.Tests
             var cfg = new CfgBin<CfgTreeNode> { Encoding = Encoding.UTF8 };
             var begin = new CfgTreeNode(new Entry("SHOP_CONFIG_INFO_BEGIN", new List<Variable>
             {
-                new Variable(CfgValueType.Int, 3),
+                new Variable(CfgValueType.Int, 4),
                 new Variable(CfgValueType.String, "shop_01")
             }));
 
@@ -1020,6 +1020,11 @@ namespace IEGORandomizer.Tests
                 new Variable(CfgValueType.String, "AQIDBA==") // Base64 condition
             })));
 
+            begin.AddChild(new CfgTreeNode(new Entry("SHOP_CONFIG_INFO", new List<Variable>
+            {
+                new Variable(CfgValueType.Int, Level5IdHelper.ComputeCrc32Utf8("ika0001")), // Fichatron card
+                new Variable(CfgValueType.Int, 0)
+            })));
             cfg.Entries.AddChild(begin);
             cfg.Entries.AddChild(new CfgTreeNode(new Entry("SHOP_CONFIG_INFO_END")));
             return cfg.Save();

@@ -1651,6 +1651,7 @@ namespace IEGORandomizer.Tests
                     Assert.True(ShopDataService.TryReadShopFile(game.GetDirectory("shop"), "shop_01.cfg.bin", out var newShop));
                     Assert.NotEqual(cleanShop[1].ItemID, newShop[1].ItemID, "Shop item should be randomized.");
                     Assert.Equal(cleanShop[2].ItemID, newShop[2].ItemID, "Shop key item must remain intact.");
+                    Assert.Equal(cleanShop[3].ItemID, newShop[3].ItemID, "Shop Fichatron card must remain available.");
                     Assert.Equal(cleanChests.Count, chests.Count);
                     foreach (var chest in chests)
                     {
